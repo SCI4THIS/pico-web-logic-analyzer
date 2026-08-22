@@ -1,3 +1,6 @@
 [submodule "submodules/pico-ws-server"]
 	path = submodules/pico-ws-server
 	url = https://github.com/cadouthat/pico-ws-server.git
+[submodule "submodules/logicanalyzer"]
+	path = submodules/logicanalyzer
+	url = https://github.com/gusmanb/logicanalyzer.git
