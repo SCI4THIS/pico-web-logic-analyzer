@@ -1,24 +1,33 @@
 <!DOCTYPE html>
-<html>
-<head>
-<title>Pico Web Logic Analyzer</title>
+<button onclick="send_cmd('STATUS')">STATUS</button>
+<button onclick="send_cmd('CAPTURE_TEST')">CAPTURE_TEST</button>
+<button onclick="send_cmd('STREAM_START')">STREAM_START</button>
+<button onclick="send_cmd('STREAM_STOP')">STREAM_STOP</button>
+<pre id="output"></pre>
 <script>
-
+const output = document.querySelector("#output");
 const ws_url = 'ws://' + location.host + '/';
 var ws = new WebSocket(ws_url);
-ws.binaryType = "arraybuffer"
+var line_count = 0;
+ws.binaryType = "arraybuffer";
 
 ws.onmessage = function(e) {
-  console.log(new Uint8Array(e.data))
+  if (line_count == 64) {
+    output.textContent = "";
+    line_count = 0;
+  }
+  if (typeof event.data == "string") {
+    output.textContent += event.data + "\n";
+  } else {
+    const samples = new Uint8Array(event.data);
+    output.textContent += Array.from(samples).join(" ") + "\n";
+  }
+  line_count++;
 }
 
 function send_cmd(s) {
-  ws.send(s)
+  output.textContent = "";
+  line_count = 0;
+  ws.send(s);
 }
 </script>
-</head>
-<body>
-  <button onclick="send_cmd('STATUS')">STATUS</button>
-</body>
-</html>
-

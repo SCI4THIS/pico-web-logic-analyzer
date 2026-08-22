@@ -5,6 +5,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/hw/bsp/family_support.cmake)
 
 # Prefer the tinyusb lwip
 set(LWIP ${TOP}/lib/lwip)
+set(LA_DIR ${CMAKE_CURRENT_LIST_DIR}/submodules/logicanalyzer/Firmware/LogicAnalyzer_V2)
 
 # If we can't find one from tinyusb then check cmake var before giving up
 if (NOT EXISTS ${LWIP}/src)
@@ -22,6 +23,11 @@ project(net_lwip_webserver C CXX ASM)
 family_initialize_project(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR})
 
 add_executable(${PROJECT_NAME})
+pico_generate_pio_header(
+  ${PROJECT_NAME}
+  ${LA_DIR}/LogicAnalyzer.pio
+)
+
 add_library(lwipopts_provider INTERFACE)
 
 target_include_directories(lwipopts_provider INTERFACE
@@ -35,11 +41,17 @@ target_compile_definitions(lwipopts_provider INTERFACE
   CFG_TUSB_MCU=OPT_MCU_RP2040
 )
 
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+  BUILD_PICO
+)
+
 
 # Example source
 target_sources(${PROJECT_NAME} PUBLIC
   ${CMAKE_CURRENT_LIST_DIR}/src/main.cpp
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_descriptors.c
+  ${CMAKE_CURRENT_LIST_DIR}/src/capture.cpp
+  ${LA_DIR}/LogicAnalyzer_Capture.c
   )
 
 # Example include
@@ -50,6 +62,10 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   ${LWIP}/src/include/lwip/apps
   ${TOP}/lib/networking
   )
+
+target_include_directories(${PROJECT_NAME} PRIVATE
+  ${LA_DIR}
+)
 
 # lib/networking sources
 target_sources(${PROJECT_NAME} PUBLIC
@@ -105,6 +121,10 @@ add_subdirectory(submodules/pico-ws-server)
 
 target_link_libraries(${PROJECT_NAME} PUBLIC
   pico_ws_server
+  hardware_dma
+  hardware_pio
+  hardware_clocks
+  hardware_exception
 )
 
 # due to warnings from other net source, we need to prevent error from some of the warnings options

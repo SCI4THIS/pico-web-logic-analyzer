@@ -49,8 +49,8 @@ enum {
 
 enum {
 #if CFG_TUD_ECM_RNDIS
-  CONFIG_ID_RNDIS = 0,
-  CONFIG_ID_ECM   = 1,
+  CONFIG_ID_ECM   = 0,
+  CONFIG_ID_RNDIS = 1,
 #else
   CONFIG_ID_NCM = 0,
 #endif

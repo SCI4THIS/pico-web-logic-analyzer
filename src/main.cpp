@@ -60,6 +60,9 @@ try changing the first byte of tud_network_mac_address[] below from 0x02 to 0x00
 #include "lwip/timeouts.h"
 #include "lwip/sys.h"
 #include "pico_ws_server/web_socket_server.h"
+#include "capture.h"
+#include "hardware/gpio.h"
+#include <cstring>
 
 #ifdef INCLUDE_IPERF
   #include "lwip/apps/lwiperf.h"
@@ -114,6 +117,16 @@ static const dhcp_config_t dhcp_config = {
 static WebSocketServer websocket_server(1);
 static uint32_t active_connection = 0;
 static bool websocket_connected = false;
+
+static bool is_capture_response_pending = false;
+static uint32_t capture_connection = 0;
+static const uint8_t test_pins[] = { };
+
+static bool stream_enabled = false;
+static bool stream_capture_pending = false;
+static uint32_t stream_connection = 0;
+static uint32_t next_stream_ms = 0;
+static const uint8_t stream_pins[] = { 0 };
 
 static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
   (void) netif;
@@ -284,8 +297,57 @@ static void websocket_disconnect(WebSocketServer& server, uint32_t connection_id
   websocket_connected = false;
 }
 
-static void websocket_message(WebSocketServer& server, uint32_t connection_id, const void *data, size_t length) {
-  server.sendMessage(connection_id, data, length);
+static void start_test_capture(WebSocketServer& server, uint32_t id)
+{
+  gpio_pull_up(2);
+  sleep_us(10);
+  bool started = capture::start_simple(1000000, 0, 64, test_pins, 1, 0, true);
+  if (started) {
+    is_capture_response_pending = true;
+    capture_connection = id;
+    gpio_pull_up(2);
+    server.sendMessage(id, "CAPTURE_STARTED");
+    sleep_us(10);
+    gpio_pull_down(2);
+  } else {
+    server.sendMessage(id, "CAPTURE_ERROR");
+  }
+}
+
+static bool start_stream_capture()
+{
+  gpio_pull_down(2);
+  sleep_us(50);
+  bool started = capture::start_simple(1000000, 0, 32, stream_pins, 1, 0, true, capture::Mode::channels8);
+  if (started) {
+    gpio_pull_up(2);
+  }
+  return started;
+}
+
+static void websocket_message(WebSocketServer& server, uint32_t id, const void *data, size_t length) {
+  if (length == 6 && memcmp(data, "STATUS", 6) == 0) {
+    server.sendMessage(id, "{\"status\":\"ok\",\"device\":\"pico-logic-analyzer\")");
+    return;
+  }
+  if (length == 12 && memcmp(data, "CAPTURE_TEST", 12) == 0) {
+    start_test_capture(server, id);
+    return;
+  }
+  if (length == 12 && memcmp(data, "STREAM_START", 12) == 0) {
+    stream_enabled = true;
+    stream_connection = id;
+    next_stream_ms = 0;
+    server.sendMessage(id, "STREAM_STARTED");
+    return;
+  }
+  if (length == 11 && memcmp(data, "STREAM_STOP", 11) == 0) {
+    stream_enabled = false;
+    capture::stop();
+    gpio_disable_pulls(2);
+    server.sendMessage(id, "STREAM_STOPPED");
+  }
+  server.sendMessage(id, data, length);
 }
 
 bool websocket_init(void) {
@@ -334,9 +396,28 @@ int main(void) {
 #endif
 
   while (1) {
+    uint32_t now = to_ms_since_boot(get_absolute_time());
     tud_task();
     sys_check_timeouts(); // service lwip
     websocket_server.popMessages();
+    if (is_capture_response_pending && !capture::busy()) {
+      auto result = capture::result();
+      size_t offset = result.first_sample * result.bytes_per_sample;
+      size_t length = result.samples * result.bytes_per_sample;
+      websocket_server.sendMessage(capture_connection, result.buffer + offset, length);
+      gpio_disable_pulls(2);
+      is_capture_response_pending = false;
+    }
+    if (stream_capture_pending && !capture::busy()) {
+      auto result = capture::result();
+      size_t offset = result.first_sample * result.bytes_per_sample;
+      websocket_server.sendMessage(stream_connection, result.buffer + offset, 32);
+      stream_capture_pending = false;
+      next_stream_ms = now + 50;
+    }
+    if (stream_enabled && !stream_capture_pending && now >= next_stream_ms) {
+      stream_capture_pending = start_stream_capture();
+    }
     handle_link_state_switch();
     led_blinking_task();
   }
