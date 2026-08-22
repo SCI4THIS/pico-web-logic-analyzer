@@ -38,7 +38,7 @@ target_compile_definitions(lwipopts_provider INTERFACE
 
 # Example source
 target_sources(${PROJECT_NAME} PUBLIC
-  ${CMAKE_CURRENT_LIST_DIR}/src/main.c
+  ${CMAKE_CURRENT_LIST_DIR}/src/main.cpp
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_descriptors.c
   )
 
@@ -90,8 +90,6 @@ target_sources(${PROJECT_NAME} PUBLIC
   ${LWIP}/src/core/ipv4/ip4_frag.c
   ${LWIP}/src/netif/ethernet.c
   ${LWIP}/src/netif/slipif.c
-  ${LWIP}/src/apps/http/httpd.c
-  ${LWIP}/src/apps/http/fs.c
   ${LWIP}/src/apps/lwiperf/lwiperf.c
   )
 

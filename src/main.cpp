@@ -59,6 +59,7 @@ try changing the first byte of tud_network_mac_address[] below from 0x02 to 0x00
 #include "lwip/init.h"
 #include "lwip/timeouts.h"
 #include "lwip/sys.h"
+#include "pico_ws_server/web_socket_server.h"
 
 #ifdef INCLUDE_IPERF
   #include "lwip/apps/lwiperf.h"
@@ -102,13 +103,17 @@ static dhcp_entry_t entries[] = {
 };
 
 static const dhcp_config_t dhcp_config = {
-    .router = INIT_IP4(0, 0, 0, 0),  /* router address (if any) */
-    .port = 67,                      /* listen port */
-    .dns = INIT_IP4(192, 168, 7, 1), /* dns server (if any) */
-    "usb",                           /* dns suffix */
-    TU_ARRAY_SIZE(entries),          /* num entry */
-    entries                          /* entries */
+    INIT_IP4(0, 0, 0, 0),     /* router address (if any) */
+    67,                       /* listen port */
+    INIT_IP4(192, 168, 7, 1), /* dns server (if any) */
+    "usb",                    /* dns suffix */
+    TU_ARRAY_SIZE(entries),   /* num entry */
+    entries                   /* entries */
 };
+
+static WebSocketServer websocket_server(1);
+static uint32_t active_connection = 0;
+static bool websocket_connected = false;
 
 static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
   (void) netif;
@@ -267,6 +272,30 @@ static void handle_link_state_switch(void) {
 
 }
 
+static void websocket_connect(WebSocketServer& server, uint32_t connection_id) {
+  active_connection = connection_id;
+  websocket_connected = true;
+  server.sendMessage(connection_id, "connected");
+}
+
+static void websocket_disconnect(WebSocketServer& server, uint32_t connection_id) {
+  (void)server;
+  (void)connection_id;
+  websocket_connected = false;
+}
+
+static void websocket_message(WebSocketServer& server, uint32_t connection_id, const void *data, size_t length) {
+  server.sendMessage(connection_id, data, length);
+}
+
+bool websocket_init(void) {
+  websocket_server.setConnectCallback(websocket_connect);
+  websocket_server.setCloseCallback(websocket_disconnect);
+  websocket_server.setMessageCallback(websocket_message);
+  websocket_server.setTcpNoDelay(true);
+  return websocket_server.startListening(80);
+}
+
 int main(void) {
   /* initialize TinyUSB */
   board_init();
@@ -285,7 +314,13 @@ int main(void) {
   while (!netif_is_up(&netif_data));
   while (dhserv_init(&dhcp_config) != ERR_OK);
   while (dnserv_init(IP_ADDR_ANY, 53, dns_query_proc) != ERR_OK);
-  httpd_init();
+  //httpd_init();
+
+  board_led_write(true);
+  if (!websocket_init()) {
+    printf("Websocket initialization failed\n");
+  }
+  board_led_write(false);
 
 #ifdef INCLUDE_IPERF
   // test with: iperf -c 192.168.7.1 -e -i 1 -M 5000 -l 8192 -r
@@ -301,6 +336,7 @@ int main(void) {
   while (1) {
     tud_task();
     sys_check_timeouts(); // service lwip
+    websocket_server.popMessages();
     handle_link_state_switch();
     led_blinking_task();
   }

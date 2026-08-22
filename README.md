@@ -66,9 +66,15 @@ Apply the pico-ws-server USB-ECM adaption:
 
 Configure and build:
 
+  export PICO_SDK_PATH=# pico-sdk
+
   cmake -S . -B build \
       -DBOARD=raspberry_pi_pico \
       -DSTATIC_HTML_PATH="$PWD/lib/lwip/src/apps/http/fs" \
       -DSTATIC_HTML_FILENAME=index.html
 
   cmake --build build --parallel
+
+Flash onto Raspberry Pi Pico:
+
+  picotool load -f build/net_lwip_webserver.uf2 --execute # -f forces, --execute restart and runs
