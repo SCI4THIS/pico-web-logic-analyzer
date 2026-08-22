@@ -22,6 +22,19 @@ project(net_lwip_webserver C CXX ASM)
 family_initialize_project(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR})
 
 add_executable(${PROJECT_NAME})
+add_library(lwipopts_provider INTERFACE)
+
+target_include_directories(lwipopts_provider INTERFACE
+  ${CMAKE_CURRENT_LIST_DIR}/src
+  ${LWIP}/src/include
+  ${LWIP}/src/include/ipv4
+  ${LWIP}/src/include/lwip/apps
+)
+
+target_compile_definitions(lwipopts_provider INTERFACE
+  CFG_TUSB_MCU=OPT_MCU_RP2040
+)
+
 
 # Example source
 target_sources(${PROJECT_NAME} PUBLIC
@@ -81,6 +94,20 @@ target_sources(${PROJECT_NAME} PUBLIC
   ${LWIP}/src/apps/http/fs.c
   ${LWIP}/src/apps/lwiperf/lwiperf.c
   )
+
+set(
+  PICO_WS_SERVER_USE_CYW43
+  OFF
+  CACHE BOOL
+  "Use CYW43 networking in pico-ws-server"
+  FORCE
+)
+
+add_subdirectory(submodules/pico-ws-server)
+
+target_link_libraries(${PROJECT_NAME} PUBLIC
+  pico_ws_server
+)
 
 # due to warnings from other net source, we need to prevent error from some of the warnings options
 if (CMAKE_C_COMPILER_ID STREQUAL "GNU")

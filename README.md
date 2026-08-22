@@ -56,3 +56,19 @@ make BOARD=raspberry_pi_pico all
 ## Try it
 
 A new USB network interface appears on the host. It is normally assigned an address in 192.168.7.x by the device's DHCP server (otherwise give the host NIC a static 192.168.7.x address), then browse to http://192.168.7.1 to load the served web page.
+
+# WebSocket support
+
+Apply the pico-ws-server USB-ECM adaption:
+
+  ./submodules/apply-pico-ws-server-patch.sh
+  #./submodules/apply-pico-ws-server-patch.sh --revert # is also available
+
+Configure and build:
+
+  cmake -S . -B build \
+      -DBOARD=raspberry_pi_pico \
+      -DSTATIC_HTML_PATH="$PWD/lib/lwip/src/apps/http/fs" \
+      -DSTATIC_HTML_FILENAME=index.html
+
+  cmake --build build --parallel
