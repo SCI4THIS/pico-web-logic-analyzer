@@ -257,6 +257,68 @@ bool websocket_init(void) {
   return websocket_server.startListening(80);
 }
 
+void capture_chain_tasks()
+{
+  uint32_t now = to_ms_since_boot(get_absolute_time());
+  if (is_capture_response_pending && !capture::busy()) {
+    auto result = capture::result();
+    size_t offset = result.first_sample * result.bytes_per_sample;
+    size_t length = result.samples * result.bytes_per_sample;
+    websocket_server.sendMessage(capture_connection, result.buffer + offset, length);
+    gpio_disable_pulls(2);
+    is_capture_response_pending = false;
+  }
+  if (capture_chain_pending && !capture::busy()) {
+#define STREAM_CAPTURE_DEBUG 0
+#if STREAM_CAPTURE_DEBUG
+    uint32_t raw_high = la_raw_high_count();
+#endif
+    auto result = capture::result();
+#if STREAM_CAPTURE_DEBUG
+    char debug[160];
+    snprintf(debug, sizeof(debug), "samples=%lu first=%lu widtdh=%u gpio=%u firstByte=%u, rawHigh=%lu",
+             result.first_sample, result.bytes_per_sample, gpio_get(3), result.buffer[result.first_sample], raw_high);
+    websocket_server.sendMessage(stream_connection, debug);
+#endif
+    size_t offset = result.first_sample * result.bytes_per_sample;
+    websocket_server.sendMessage(stream_connection, result.buffer + offset, 32);
+    capture_chain_pending = false;
+    next_stream_ms = now + 50;
+  }
+  if (capture_chain_enabled && !capture_chain_pending && now >= next_stream_ms) {
+    capture_chain_pending = start_capture_chain();
+  }
+  if (capture_chain_analysis_enabled && !block_pending) {
+    block_pending = la_capture_chain_take(&pending_analysis_block);
+  }
+  if (block_pending) {
+    if (send_analysis_block(pending_analysis_block)) {
+      la_capture_chain_release(pending_analysis_block.slot);
+      block_pending = false;
+    }
+  }
+}
+
+void stream_tasks()
+{
+  if (stream_mode != StreamMode::stopped && !stream_block_pending) {
+    stream_block_pending = la_stream_take(&pending_analysis_block);
+  }
+  if (stream_block_pending) {
+    bool sent = stream_mode == StreamMode::analysis
+        ? send_analysis_block(pending_analysis_block)
+        : websocket_server.sendMessage(
+              stream_connection,
+              pending_analysis_block.data,
+              pending_analysis_block.bytes);
+
+    if (sent) {
+      la_stream_release(pending_analysis_block.slot);
+      stream_block_pending = false;
+    }
+  }
+}
+
 int main(void) {
   tinyusb_network_init();
 
@@ -267,61 +329,9 @@ int main(void) {
   board_led_write(false);
 
   while (1) {
-    uint32_t now = to_ms_since_boot(get_absolute_time());
     tinyusb_network_poll();
     websocket_server.popMessages();
-    if (is_capture_response_pending && !capture::busy()) {
-      auto result = capture::result();
-      size_t offset = result.first_sample * result.bytes_per_sample;
-      size_t length = result.samples * result.bytes_per_sample;
-      websocket_server.sendMessage(capture_connection, result.buffer + offset, length);
-      gpio_disable_pulls(2);
-      is_capture_response_pending = false;
-    }
-    if (capture_chain_pending && !capture::busy()) {
-#define STREAM_CAPTURE_DEBUG 0
-#if STREAM_CAPTURE_DEBUG
-      uint32_t raw_high = la_raw_high_count();
-#endif
-      auto result = capture::result();
-#if STREAM_CAPTURE_DEBUG
-      char debug[160];
-      snprintf(debug, sizeof(debug), "samples=%lu first=%lu widtdh=%u gpio=%u firstByte=%u, rawHigh=%lu",
-               result.first_sample, result.bytes_per_sample, gpio_get(3), result.buffer[result.first_sample], raw_high);
-      websocket_server.sendMessage(stream_connection, debug);
-#endif
-      size_t offset = result.first_sample * result.bytes_per_sample;
-      websocket_server.sendMessage(stream_connection, result.buffer + offset, 32);
-      capture_chain_pending = false;
-      next_stream_ms = now + 50;
-    }
-    if (capture_chain_enabled && !capture_chain_pending && now >= next_stream_ms) {
-      capture_chain_pending = start_capture_chain();
-    }
-    if (capture_chain_analysis_enabled && !block_pending) {
-      block_pending = la_capture_chain_take(&pending_analysis_block);
-    }
-    if (block_pending) {
-      if (send_analysis_block(pending_analysis_block)) {
-        la_capture_chain_release(pending_analysis_block.slot);
-	block_pending = false;
-      }
-    }
-    if (stream_mode != StreamMode::stopped && !stream_block_pending) {
-      stream_block_pending = la_stream_take(&pending_analysis_block);
-    }
-    if (stream_block_pending) {
-      bool sent = stream_mode == StreamMode::analysis
-          ? send_analysis_block(pending_analysis_block)
-          : websocket_server.sendMessage(
-                stream_connection,
-                pending_analysis_block.data,
-                pending_analysis_block.bytes);
-
-      if (sent) {
-        la_stream_release(pending_analysis_block.slot);
-        stream_block_pending = false;
-      }
-    }
+    capture_chain_tasks();
+    stream_tasks();
   }
 }

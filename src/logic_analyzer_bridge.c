@@ -39,7 +39,7 @@ uint32_t la_raw_high_count(void)
   return count;
 }
 
-#define LA_MAX_CHANNELS 8
+#define LA_MAX_CHANNELS 24
 
 struct {
   uint32_t frequency;
