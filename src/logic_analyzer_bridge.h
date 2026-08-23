@@ -17,7 +17,14 @@ typedef struct {
   uint8_t  slot;
 } la_analysis_block_t;
 
-bool la_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count);
+
+uint32_t la_configure_frequency(uint32_t *freq);
+uint32_t la_configure_chunk_bytes(uint32_t *chunk_bytes);
+uint8_t  la_configure_channel(size_t i, uint8_t *channel);
+uint8_t  la_configure_channel_count(uint8_t *channel_count);
+uint8_t  la_copy_channels(uint8_t *channels, size_t siz);
+
+bool la_is_busy(void);
 
 bool la_capture_chain_start(void);
 bool la_capture_chain_take(la_analysis_block_t *block);
@@ -28,7 +35,6 @@ bool la_stream_start(void);
 bool la_stream_take(la_analysis_block_t *block);
 void la_stream_release(uint8_t slot);
 void la_stream_stop(void);
-bool la_stream_is_running(void);
 
 uint32_t la_raw_high_count(void);
 

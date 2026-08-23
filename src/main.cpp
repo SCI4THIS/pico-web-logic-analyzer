@@ -12,16 +12,11 @@ static bool websocket_connected = false;
 
 static bool is_capture_response_pending = false;
 static uint32_t capture_connection = 0;
-static const uint8_t test_pins[] = {1};
 
 static bool capture_chain_enabled = false;
 static bool capture_chain_pending = false;
 static uint32_t stream_connection = 0;
 static uint32_t next_stream_ms = 0;
-static const uint8_t stream_pins[] = { 1 };
-
-static uint32_t requested_frequency = 1000;
-static uint32_t requested_chunk_size = 256;
 
 struct __attribute__((packed)) StreamHeader {
   uint32_t magic;
@@ -53,6 +48,11 @@ enum class StreamMode {
 static StreamMode stream_mode = StreamMode::stopped;
 static bool stream_block_pending = false;
 
+static bool is_busy()
+{
+  return la_is_busy() || capture::busy() || is_capture_response_pending ||
+         capture_chain_enabled || capture_chain_pending;
+}
 
 static void websocket_connect(WebSocketServer& server, uint32_t connection_id) {
   active_connection = connection_id;
@@ -70,7 +70,10 @@ static void start_test_capture(WebSocketServer& server, uint32_t id)
 {
   gpio_pull_up(2);
   sleep_us(10);
-  bool started = capture::start_simple(1000000, 0, 64, test_pins, 1, 0, true);
+  uint8_t pins[24] = { 0 };
+  uint8_t pin_count = la_copy_channels(pins, sizeof(pins));
+  uint32_t freq = la_configure_frequency(NULL);
+  bool started = capture::start_simple(freq, 0, 64, pins, pin_count, 0, true);
   if (started) {
     is_capture_response_pending = true;
     capture_connection = id;
@@ -87,7 +90,10 @@ static bool start_capture_chain()
 {
   gpio_pull_down(2);
   sleep_us(50);
-  bool started = capture::start_simple(1000000, 0, 32, stream_pins, 1, 0, true, capture::Mode::channels8);
+  uint8_t channels[24] = { 0 };
+  uint8_t channel_count = la_copy_channels(channels, sizeof(channels));
+  uint32_t frequency = la_configure_frequency(NULL);
+  bool started = capture::start_simple(frequency, 0, 32, channels, channel_count, 0, true, capture::Mode::channels8);
   if (started) {
     gpio_pull_up(2);
   }
@@ -103,7 +109,7 @@ static bool send_analysis_block(const la_analysis_block_t& block)
     STREAM_MAGIC,
     block.sequence,
     block.samples,
-    requested_frequency,
+    la_configure_frequency(NULL),
     block.overruns,
     block.bytes,
     block.first_sample,
@@ -116,14 +122,8 @@ static bool send_analysis_block(const la_analysis_block_t& block)
 
 static bool start_stream(WebSocketServer& server, uint32_t id, StreamMode mode)
 {
-  if (capture_chain_enabled || capture_chain_pending ||
-      capture_chain_analysis_enabled || is_capture_response_pending) {
+  if (is_busy()) {
     server.sendMessage(id, "CAPTURE_BUSY");
-    return false;
-  }
-
-  if (!la_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
-    server.sendMessage(id, "CONFIG_ERROR");
     return false;
   }
 
@@ -158,16 +158,16 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     return;
   }
   if (COMMAND_IS("CAPTURE_TEST")) {
-    if (la_stream_is_running()) {
-      server.sendMessage(id, "STREAM_BUSY");
+    if (is_busy()) {
+      server.sendMessage(id, "CAPTURE_BUSY");
       return;
     }
     start_test_capture(server, id);
     return;
   }
   if (COMMAND_IS("CAPTURE_CHAIN_START")) {
-    if (la_stream_is_running()) {
-      server.sendMessage(id, "STREAM_BUSY");
+    if (is_busy()) {
+      server.sendMessage(id, "CAPTURE_BUSY");
       return;
     }
     capture_chain_enabled = true;
@@ -188,12 +188,8 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     return;
   }
   if (COMMAND_IS("CAPTURE_CHAIN_ANALYSIS_START")) {
-    if (la_stream_is_running()) {
-      server.sendMessage(id, "STREAM_BUSY");
-      return;
-    }
-    if (!la_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
-      server.sendMessage(id, "CONFIG_ERROR");
+    if (is_busy()) {
+      server.sendMessage(id, "CAPTURE_BUSY");
       return;
     }
     if (!la_capture_chain_start()) {
@@ -238,13 +234,15 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   memmove(command, data, count);
   command[count] = '\0';
   if (sscanf(command, "SET_FREQ %lu", &value) == 1) {
-    requested_frequency = value;
-    server.sendMessage(id, "OK");
+    value = la_configure_frequency(&value);
+    snprintf(command, sizeof(command), "FREQ %lu", value);
+    server.sendMessage(id, command);
     return;
   }
   if (sscanf(command, "SET_CHUNK_SIZE %lu", &value) == 1) {
-    requested_chunk_size = value;
-    server.sendMessage(id, "OK");
+    value = la_configure_chunk_bytes(&value);
+    snprintf(command, sizeof(command), "CHUNKS_SIZE %lu", value);
+    server.sendMessage(id, command);
     return;
   }
   server.sendMessage(id, data, length);

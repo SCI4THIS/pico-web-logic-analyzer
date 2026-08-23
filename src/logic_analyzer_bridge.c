@@ -39,25 +39,97 @@ uint32_t la_raw_high_count(void)
   return count;
 }
 
+#define LA_MAX_CHANNELS 8
 
-static uint32_t la_frequency = 1000;
-static uint32_t la_chunk_bytes = 256;
-
-static uint8_t la_channels[24];
-static uint8_t la_channel_count;
+struct {
+  uint32_t frequency;
+  uint32_t chunk_bytes;
+  uint8_t channel_count;
+  uint8_t channels[LA_MAX_CHANNELS];
+} la_config = {
+  .frequency = 1000,
+  .chunk_bytes = 256,
+  .channel_count = 1,
+  .channels = {1},
+};
 
 static bool la_running;
 static bool la_capture_active;
 static bool la_block_outstanding;
+static bool la_stream_running;
 
 static uint32_t la_sequence;
 static uint64_t la_next_sample;
+
+bool la_is_busy(void)
+{
+  return la_running || la_stream_running;
+}
+
+uint32_t la_configure_frequency(uint32_t *freq)
+{
+  if (freq != NULL && !la_is_busy()) {
+    if (0 < *freq && *freq <= MAX_FREQ) {
+      la_config.frequency = *freq;
+    }
+  }
+  return la_config.frequency;
+}
+
+uint32_t la_configure_chunk_bytes(uint32_t *chunk_bytes)
+{
+  if (chunk_bytes != NULL && !la_is_busy()) {
+    if (0 < *chunk_bytes && *chunk_bytes <= 8192) {
+      la_config.chunk_bytes = *chunk_bytes;
+    }
+  }
+  return la_config.chunk_bytes;
+}
+
+uint8_t la_configure_channel(size_t i, uint8_t *channel)
+{
+  if (i >= la_config.channel_count) {
+    return 0xFF;
+  }
+  if (channel != NULL && !la_is_busy()) {
+    if (*channel < LA_MAX_CHANNELS) {
+      la_config.channels[i] = *channel;
+    }
+  }
+  return la_config.channels[i];
+}
+
+uint8_t la_configure_channel_count(uint8_t *channel_count)
+{
+  if (channel_count != NULL && !la_is_busy()) {
+    if (*channel_count <= LA_MAX_CHANNELS) {
+      la_config.channel_count = *channel_count;
+    }
+  }
+  return la_config.channel_count;
+}
+
+uint8_t la_copy_channels(uint8_t *channel_out, size_t channel_out_size)
+{
+  size_t i;
+  size_t n = channel_out_size;
+  if (la_config.channel_count < n) {
+    n = la_config.channel_count;
+  }
+  for (i=0; i<n; i++) {
+    channel_out[i] = la_configure_channel(i, NULL);
+  }
+  return n;
+}
 
 static bool la_start_chunk(void)
 {
   gpio_pull_down(pinMap[0]);
   sleep_us(50);
-  bool started = StartCaptureSimple(la_frequency, 0, la_chunk_bytes, 0, 0, la_channels, la_channel_count, 0, true, MODE_8_CHANNEL);
+  bool started = StartCaptureSimple(
+      la_config.frequency, 0, la_config.chunk_bytes, 0, 0,
+      la_config.channels, la_config.channel_count, 0, true,
+      MODE_8_CHANNEL);
   if (started) {
     la_capture_active = true;
     sleep_us(50);
@@ -68,10 +140,7 @@ static bool la_start_chunk(void)
 
 bool la_capture_chain_start(void)
 {
-  if (la_running || la_stream_is_running()) {
-    return false;
-  }
-  if (la_channel_count == 0 || la_chunk_bytes == 0) {
+  if (la_is_busy()) {
     return false;
   }
   la_sequence = 0;
@@ -138,24 +207,6 @@ void la_capture_chain_stop(void)
   la_block_outstanding = false;
 }
 
-bool la_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count)
-{
-  uint8_t i;
-  if (la_running || la_stream_is_running() || frequency > MAX_FREQ || !channels || channel_count == 0 || channel_count > 8 || chunk_bytes == 0 || chunk_bytes > 8192 || CAPTURE_BUFFER_SIZE % chunk_bytes != 0) {
-    return false;
-  }
-  for (i=0; i<channel_count; i++) {
-    if (channels[i] >= 8) {
-      return false;
-    }
-  }
-  la_frequency = frequency;
-  la_chunk_bytes = chunk_bytes;
-  la_channel_count = channel_count;
-  memmove(la_channels, channels, channel_count);
-  return true;
-}
-
 static uint16_t la_stream_pio_instructions[2];
 
 static const struct pio_program la_stream_pio_program = {
@@ -164,18 +215,12 @@ static const struct pio_program la_stream_pio_program = {
   .origin = -1,
 };
 
-static bool la_stream_running;
 static bool la_stream_block_outstanding;
 
 static volatile uint32_t la_stream_completed_passes;
 static uint64_t la_stream_next_chunk;
 static uint64_t la_stream_last_produced_bytes;
 static uint32_t la_stream_overruns;
-
-bool la_stream_is_running(void)
-{
-  return la_stream_running;
-}
 
 static void __not_in_flash_func(la_stream_dma_handler)(void)
 {
@@ -238,10 +283,7 @@ static void la_stream_stop_hardware(void)
 
 bool la_stream_start(void)
 {
-  if (la_stream_running || la_running ||
-      la_frequency == 0 || la_frequency > MAX_FREQ ||
-      la_channel_count == 0 || la_chunk_bytes == 0 ||
-      CAPTURE_BUFFER_SIZE % la_chunk_bytes != 0) {
+  if (la_is_busy()) {
     return false;
   }
 
@@ -274,7 +316,8 @@ bool la_stream_start(void)
   pio_sm_config config = pio_get_default_sm_config();
   sm_config_set_wrap(&config, captureOffset, captureOffset + 1);
   sm_config_set_in_pins(&config, INPUT_PIN_BASE);
-  float clkdiv = (float)clock_get_hz(clk_sys) / (float)(la_frequency * 2u);
+  float clkdiv =
+      (float)clock_get_hz(clk_sys) / (float)(la_config.frequency * 2u);
   sm_config_set_clkdiv(&config, clkdiv);
   sm_config_set_in_shift(&config, true, true, 32);
   sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_RX);
@@ -299,13 +342,14 @@ bool la_stream_take(la_analysis_block_t *block)
     return false;
   }
 
-  uint64_t completed_chunks = la_stream_produced_bytes() / la_chunk_bytes;
+  uint64_t completed_chunks =
+      la_stream_produced_bytes() / la_config.chunk_bytes;
 
   if (la_stream_next_chunk >= completed_chunks) {
     return false;
   }
 
-  const uint32_t slot_count = CAPTURE_BUFFER_SIZE / la_chunk_bytes;
+  const uint32_t slot_count = CAPTURE_BUFFER_SIZE / la_config.chunk_bytes;
 
   if (completed_chunks - la_stream_next_chunk >= slot_count) {
     uint64_t oldest_available = completed_chunks - slot_count + 1;
@@ -313,14 +357,15 @@ bool la_stream_take(la_analysis_block_t *block)
     la_stream_next_chunk = oldest_available;
   }
 
-  uint32_t offset = (uint32_t)((la_stream_next_chunk % slot_count) * la_chunk_bytes);
+  uint32_t offset = (uint32_t)(
+      (la_stream_next_chunk % slot_count) * la_config.chunk_bytes);
 
   block->data = captureBuffer + offset;
-  block->bytes = la_chunk_bytes;
-  block->samples = la_chunk_bytes;
+  block->bytes = la_config.chunk_bytes;
+  block->samples = la_config.chunk_bytes;
   block->sequence = (uint32_t)la_stream_next_chunk;
   block->overruns = la_stream_overruns;
-  block->first_sample = la_stream_next_chunk * la_chunk_bytes;
+  block->first_sample = la_stream_next_chunk * la_config.chunk_bytes;
   block->device_time_us = time_us_64();
   block->slot = 0;
 
