@@ -17,13 +17,13 @@ typedef struct {
   uint8_t  slot;
 } la_analysis_block_t;
 
-bool la_capture_chain_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count);
-bool la_capture_chain_start();
+bool la_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count);
+
+bool la_capture_chain_start(void);
 bool la_capture_chain_take(la_analysis_block_t *block);
 void la_capture_chain_release(uint8_t slot);
 void la_capture_chain_stop(void);
 
-bool la_stream_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count);
 bool la_stream_start(void);
 bool la_stream_take(la_analysis_block_t *block);
 void la_stream_release(uint8_t slot);

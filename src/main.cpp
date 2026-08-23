@@ -122,8 +122,7 @@ static bool start_stream(WebSocketServer& server, uint32_t id, StreamMode mode)
     return false;
   }
 
-  if (!la_stream_configure(requested_frequency, requested_chunk_size,
-                           stream_pins, 1)) {
+  if (!la_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
     server.sendMessage(id, "CONFIG_ERROR");
     return false;
   }
@@ -193,7 +192,7 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
       server.sendMessage(id, "STREAM_BUSY");
       return;
     }
-    if (!la_capture_chain_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
+    if (!la_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
       server.sendMessage(id, "CONFIG_ERROR");
       return;
     }
