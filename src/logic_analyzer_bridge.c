@@ -8,6 +8,8 @@
  * they are now part of the same translation unit.
  */
 
+static uint8_t la_bytes_per_sample_mode(CHANNEL_MODE mode);
+
 void la_get_debug(uint32_t *tail, uint32_t *start, uint8_t *pin_count)
 {
   *tail = lastTail;
@@ -19,19 +21,26 @@ uint32_t la_raw_high_count(void)
 {
   uint32_t count = 0;
   uint32_t total = lastPreSize + lastPostSize * (lastLoopCount + 1);
+  uint8_t width = la_bytes_per_sample_mode(lastCaptureMode);
+  uint32_t max_samples = CAPTURE_BUFFER_SIZE / width;
   uint32_t first;
 
   if (lastTail < total - 1) {
-    first = CAPTURE_BUFFER_SIZE - total + lastTail + 1;
+    first = max_samples - total + lastTail + 1;
   } else {
     first = lastTail - total + 1;
   }
 
-  uint8_t mask = 1u << (lastCapturePins[0] - INPUT_PIN_BASE);
+  uint32_t mask = 1u << (lastCapturePins[0] - INPUT_PIN_BASE);
 
   for (uint32_t i = 0; i< total; i++) {
-    uint32_t position = (first + i) % CAPTURE_BUFFER_SIZE;
-    if (captureBuffer[position] & mask) {
+    uint32_t position = (first + i) % max_samples;
+    uint32_t value = width == 1
+        ? captureBuffer[position]
+        : width == 2
+          ? ((uint16_t *)captureBuffer)[position]
+          : ((uint32_t *)captureBuffer)[position];
+    if (value & mask) {
       count++;
     }
   }
@@ -39,18 +48,20 @@ uint32_t la_raw_high_count(void)
   return count;
 }
 
-#define LA_MAX_CHANNELS 24
-
 struct {
   uint32_t frequency;
   uint32_t chunk_bytes;
   uint8_t channel_count;
   uint8_t channels[LA_MAX_CHANNELS];
+  CHANNEL_MODE mode;
+  uint8_t bytes_per_sample;
 } la_config = {
   .frequency = 1000,
   .chunk_bytes = 256,
   .channel_count = 1,
   .channels = {1},
+  .mode = MODE_8_CHANNEL,
+  .bytes_per_sample = 1,
 };
 
 static bool la_running;
@@ -67,6 +78,32 @@ bool la_is_busy(void)
   return la_running || la_stream_running || la_single_capture_active;
 }
 
+static uint8_t la_bytes_per_sample_mode(CHANNEL_MODE mode)
+{
+  switch (mode) {
+    case MODE_8_CHANNEL: return 1;
+    case MODE_16_CHANNEL: return 2;
+    case MODE_24_CHANNEL: return 4;
+  }
+  return 0;
+}
+
+static void la_update_channel_mode(void)
+{
+  uint8_t highest = 0;
+
+  for (uint8_t i = 0; i < la_config.channel_count; i++) {
+    if (la_config.channels[i] > highest) {
+      highest = la_config.channels[i];
+    }
+  }
+
+  la_config.mode = highest < 8
+      ? MODE_8_CHANNEL
+      : highest < 16 ? MODE_16_CHANNEL : MODE_24_CHANNEL;
+  la_config.bytes_per_sample = la_bytes_per_sample_mode(la_config.mode);
+}
+
 uint32_t la_configure_frequency(uint32_t *freq)
 {
   if (freq != NULL && !la_is_busy()) {
@@ -80,7 +117,9 @@ uint32_t la_configure_frequency(uint32_t *freq)
 uint32_t la_configure_chunk_bytes(uint32_t *chunk_bytes)
 {
   if (chunk_bytes != NULL && !la_is_busy()) {
-    if (0 < *chunk_bytes && *chunk_bytes <= 8192) {
+    if (0 < *chunk_bytes && *chunk_bytes <= LA_MAX_CHUNK_BYTES &&
+        CAPTURE_BUFFER_SIZE % *chunk_bytes == 0 &&
+        *chunk_bytes % sizeof(uint32_t) == 0) {
       la_config.chunk_bytes = *chunk_bytes;
     }
   }
@@ -95,6 +134,7 @@ uint8_t la_configure_channel(size_t i, uint8_t *channel)
   if (channel != NULL && !la_is_busy()) {
     if (*channel < LA_MAX_CHANNELS) {
       la_config.channels[i] = *channel;
+      la_update_channel_mode();
     }
   }
   return la_config.channels[i];
@@ -103,8 +143,9 @@ uint8_t la_configure_channel(size_t i, uint8_t *channel)
 uint8_t la_configure_channel_count(uint8_t *channel_count)
 {
   if (channel_count != NULL && !la_is_busy()) {
-    if (*channel_count <= LA_MAX_CHANNELS) {
+    if (0 < *channel_count && *channel_count <= LA_MAX_CHANNELS) {
       la_config.channel_count = *channel_count;
+      la_update_channel_mode();
     }
   }
   return la_config.channel_count;
@@ -123,16 +164,6 @@ uint8_t la_copy_channels(uint8_t *channel_out, size_t channel_out_size)
   return n;
 }
 
-uint8_t la_bytes_per_sample_mode(CHANNEL_MODE mode)
-{
-  switch (mode) {
-    case MODE_8_CHANNEL: return 1;
-    case MODE_16_CHANNEL: return 2;
-    case MODE_24_CHANNEL: return 3;
-  }
-  return 0;
-}
-
 bool la_single_capture_is_running(void)
 {
   return la_single_capture_active && IsCapturing();
@@ -144,7 +175,7 @@ bool la_single_capture_start(uint32_t pre_samples, uint32_t post_samples,
   uint32_t freq = la_config.frequency;
   uint8_t *pins = la_config.channels;
   uint8_t  pin_count = la_config.channel_count;
-  CHANNEL_MODE mode = MODE_8_CHANNEL;
+  CHANNEL_MODE mode = la_config.mode;
 
   if (la_is_busy()) {
     return false;
@@ -190,10 +221,12 @@ static bool la_start_chunk(void)
 {
   gpio_pull_down(pinMap[0]);
   sleep_us(50);
+  uint32_t chunk_samples =
+      la_config.chunk_bytes / la_config.bytes_per_sample;
   bool started = StartCaptureSimple(
-      la_config.frequency, 0, la_config.chunk_bytes, 0, 0,
+      la_config.frequency, 0, chunk_samples, 0, 0,
       la_config.channels, la_config.channel_count, 0, true,
-      MODE_8_CHANNEL);
+      la_config.mode);
   if (started) {
     la_capture_active = true;
     sleep_us(50);
@@ -230,11 +263,11 @@ bool la_capture_chain_take(la_analysis_block_t *block)
   uint32_t first;
   CHANNEL_MODE mode;
   uint8_t *buffer = GetBuffer(&samples, &first, &mode);
-  if (mode != MODE_8_CHANNEL) {
+  if (mode != la_config.mode) {
     return false;
   }
-  block->data = buffer + first;
-  block->bytes = samples;
+  block->data = buffer + first * la_config.bytes_per_sample;
+  block->bytes = samples * la_config.bytes_per_sample;
   block->samples = samples;
   block->sequence = la_sequence++;
   block->overruns = 0;
@@ -305,9 +338,13 @@ static uint64_t la_stream_produced_bytes(void)
     return la_stream_last_produced_bytes;
   }
 
+  uint32_t transfers_per_pass =
+      CAPTURE_BUFFER_SIZE / la_config.bytes_per_sample;
+
   uint64_t produced =
       (uint64_t)passes * CAPTURE_BUFFER_SIZE +
-      (CAPTURE_BUFFER_SIZE - remaining);
+      (uint64_t)(transfers_per_pass - remaining) *
+          la_config.bytes_per_sample;
 
   /* The next DMA can start just before its completion IRQ is serviced. */
   if (produced < la_stream_last_produced_bytes) {
@@ -370,11 +407,14 @@ bool la_stream_start(void)
   pio_sm_restart(capturePIO, sm_Capture);
   captureOffset = pio_add_program(capturePIO, &la_stream_pio_program);
 
-  /* MODE_8_CHANNEL samples board channels 1-8 / GPIO2-GPIO9. */
-  for (uint8_t i = 0; i < 8; i++) {
-    pio_gpio_init(capturePIO, INPUT_PIN_BASE + i);
+  uint8_t channel_span = la_config.mode == MODE_8_CHANNEL
+      ? 8
+      : la_config.mode == MODE_16_CHANNEL ? 16 : 24;
+
+  for (uint8_t i = 0; i < channel_span; i++) {
+    pio_gpio_init(capturePIO, pinMap[i]);
     pio_sm_set_consecutive_pindirs(
-        capturePIO, sm_Capture, INPUT_PIN_BASE + i, 1, false);
+        capturePIO, sm_Capture, pinMap[i], 1, false);
   }
 
   pio_sm_config config = pio_get_default_sm_config();
@@ -388,7 +428,7 @@ bool la_stream_start(void)
 
   pio_sm_init(capturePIO, sm_Capture, captureOffset, &config);
 
-  configureCaptureDMAs(MODE_8_CHANNEL);
+  configureCaptureDMAs(la_config.mode);
 
   irq_set_enabled(DMA_IRQ_0, false);
   irq_remove_handler(DMA_IRQ_0, la_original_dma_handler);
@@ -426,10 +466,11 @@ bool la_stream_take(la_analysis_block_t *block)
 
   block->data = captureBuffer + offset;
   block->bytes = la_config.chunk_bytes;
-  block->samples = la_config.chunk_bytes;
+  block->samples =
+      la_config.chunk_bytes / la_config.bytes_per_sample;
   block->sequence = (uint32_t)la_stream_next_chunk;
   block->overruns = la_stream_overruns;
-  block->first_sample = la_stream_next_chunk * la_config.chunk_bytes;
+  block->first_sample = la_stream_next_chunk * block->samples;
   block->device_time_us = time_us_64();
   block->slot = 0;
 

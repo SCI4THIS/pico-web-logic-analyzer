@@ -7,6 +7,9 @@
 extern "C" {
 #endif
 
+#define LA_MAX_CHANNELS 24
+#define LA_MAX_CHUNK_BYTES (8u * 1024u)
+
 bool la_is_busy(void);
 
 uint32_t la_configure_frequency(uint32_t *freq);

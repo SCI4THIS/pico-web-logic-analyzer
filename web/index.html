@@ -1,22 +1,32 @@
 <!DOCTYPE html>
-<button onclick="send_cmd('STATUS')">STATUS</button>
-<button onclick="send_cmd('SINGLE_CAPTURE')">SINGLE_CAPTURE</button>
-<button onclick="send_cmd('CAPTURE_CHAIN_START')">CAPTURE_CHAIN_START</button>
-<button onclick="send_cmd('CAPTURE_CHAIN_STOP')">CAPTURE_CHAIN_STOP</button>
-<button onclick="send_cmd('PIN_TEST')">PIN_TEST</button>
-<br />
-<input id="frequency" type="number" value="1000">
-<select id="chunkSize">
+<h1>Configure</h1>
+Frequency: <input id="frequency" type="number" value="1000"> Hz <br />
+Channel Count: <input id="channel_count" type="number" value="1"> <br />
+<div id="channels">
+<input id="channel_0" type="number" value="0" max="23" value="1">
+</div>
+Chunk Size: <select id="chunkSize">
   <option value="256">256 B</option>
   <option value="1024">1 KiB</option>
   <option value="4096">4 KiB</option>
 </select>
 <button id="configure">Configure</button>
+<h1>Actions</h1>
+<button onclick="send_cmd('STATUS')">STATUS</button>
+<br />
+<button onclick="send_cmd('SINGLE_CAPTURE')">SINGLE_CAPTURE</button>
+<br />
+<button onclick="send_cmd('CAPTURE_CHAIN_START')">CAPTURE_CHAIN_START</button>
+<button onclick="send_cmd('CAPTURE_CHAIN_STOP')">CAPTURE_CHAIN_STOP</button>
+<br />
+<button onclick="send_cmd('PIN_TEST')">PIN_TEST</button>
+<br />
 <button onclick="send_cmd('CAPTURE_CHAIN_ANALYSIS_START')">CAPTURE_CHAIN_ANALYSIS_START</button>
 <button onclick="send_cmd('CAPTURE_CHAIN_ANALYSIS_STOP')">CAPTURE_CHAIN_ANALYSIS_STOP</button>
 <br />
 <button onclick="send_cmd('STREAM_START')">STREAM_START</button>
 <button onclick="send_cmd('STREAM_STOP')">STREAM_STOP</button>
+<br />
 <button onclick="send_cmd('STREAM_ANALYSIS_START')">STREAM_ANALYSIS_START</button>
 <button onclick="send_cmd('STREAM_ANALYSIS_STOP')">STREAM_ANALYSIS_STOP</button>
 <pre id="output"></pre>
@@ -32,6 +42,30 @@ var expectedSample;
 var totalSamples;
 var startTime;
 var analysisMode = false;
+
+function update_channel_count(e) {
+  const countInput = document.getElementById("channel_count");
+  const container = document.getElementById("channels");
+  const count = Math.max(1, Math.min(24, countInput.value));
+  countInput.value = count;
+  const previous = Array.from(container.querySelectorAll("input")).map(function(input) { return input.value });
+  container.replaceChildren();
+  for (let i=0; i<count; i++) {
+    const label = document.createElement("label");
+    const input = document.createElement("input");
+    input.id = `channel_${i}`;
+    input.type = "number";
+    input.min = "0";
+    input.max = "23";
+    input.value = previous[i] ?? i;
+    label.append(`Channel ${i + 1}: `, input);
+    container.append(label, document.createElement("br"));
+  }
+}
+
+document.getElementById("channel_count").value = 1;
+update_channel_count(event);
+document.getElementById("channel_count").onchange = update_channel_count;
 
 function handle_analysis(view, data)
 {
@@ -50,8 +84,22 @@ function handle_analysis(view, data)
   lastSequence = sequence;
   expectedSample = firstSample + BigInt(sampleCount);
   totalSamples += sampleCount;
-  const samples = new Uint8Array(data, 40, payloadBytes);
-  output.textContent = Array.from(samples).slice(0, 32).map(function(value, index) { return `${index}: ${value}`; } ).join("\n");
+  const bytesPerSample = payloadBytes / sampleCount;
+  const payload = new DataView(data, 40, payloadBytes);
+  const displayed = Math.min(sampleCount, 32);
+  const samples = [];
+
+  for (let index = 0; index < displayed; index++) {
+    const offset = index * bytesPerSample;
+    const value = bytesPerSample === 1
+      ? payload.getUint8(offset)
+      : bytesPerSample === 2
+        ? payload.getUint16(offset, true)
+        : payload.getUint32(offset, true);
+    samples.push(`${index}: ${value}`);
+  }
+
+  output.textContent = samples.join("\n");
   const seconds = (performance.now() - startTime) / 1000;
   stats.textContent =
     `Configured: ${sampleRate} sample/s\n` +
@@ -109,8 +157,23 @@ function send_cmd(s) {
   ws.send(s);
 }
 
-configure.onclick = function() {
+document.getElementById("configure").onclick = function() {
+  const count = Number(document.getElementById("channel_count").value);
+  const selectedChannels = [];
+  for (let i=0; i<count; i++) {
+    const channel = Number(document.getElementById(`channel_${i}`).value);
+    if (!Number.isInteger(channel) || channel < 0 || channel >= 24) {
+      output.textContent = `Channel ${i + 1} must be between 0 and 23\n`;
+      return;
+    }
+    selectedChannels.push(channel);
+  }
+
   ws.send(`SET_FREQ ${frequency.value}`);
   ws.send(`SET_CHUNK_SIZE ${chunkSize.value}`);
+  ws.send(`SET_CHANNEL_COUNT ${selectedChannels.length}`);
+  selectedChannels.forEach((channel, index) => {
+    ws.send(`SET_CHANNEL ${index} ${channel}`);
+  });
 }
 </script>

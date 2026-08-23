@@ -31,7 +31,7 @@ struct __attribute__((packed)) StreamHeader {
 static_assert(sizeof(StreamHeader) == 40);
 
 static constexpr uint32_t STREAM_MAGIC = 0x31414C50;
-static constexpr size_t MAX_STREAM_CHUNK = 8192;
+static constexpr size_t MAX_STREAM_CHUNK = LA_MAX_CHUNK_BYTES;
 
 static uint8_t stream_frame[sizeof(StreamHeader) + MAX_STREAM_CHUNK];
 static bool block_pending = false;
@@ -140,6 +140,7 @@ static void stop_stream(void)
 
 static void websocket_message(WebSocketServer& server, uint32_t id, const void *data, size_t length) {
   uint32_t value;
+  uint32_t channel_index;
   char command[64];
   size_t count = length < sizeof(command) - 1 ? length : sizeof(command) - 1;
 
@@ -235,6 +236,21 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   if (sscanf(command, "SET_CHUNK_SIZE %lu", &value) == 1) {
     value = la_configure_chunk_bytes(&value);
     snprintf(command, sizeof(command), "CHUNKS_SIZE %lu", value);
+    server.sendMessage(id, command);
+    return;
+  }
+  if (sscanf(command, "SET_CHANNEL_COUNT %lu", &value) == 1) {
+    uint8_t requested = value <= LA_MAX_CHANNELS ? (uint8_t)value : 0;
+    uint8_t configured = la_configure_channel_count(&requested);
+    snprintf(command, sizeof(command), "CHANNEL_COUNT %u", configured);
+    server.sendMessage(id, command);
+    return;
+  }
+  if (sscanf(command, "SET_CHANNEL %lu %lu", &channel_index, &value) == 2) {
+    uint8_t requested = value < LA_MAX_CHANNELS ? (uint8_t)value : 0xFF;
+    uint8_t configured = la_configure_channel(channel_index, &requested);
+    snprintf(command, sizeof(command), "CHANNEL %lu %u",
+             channel_index, configured);
     server.sendMessage(id, command);
     return;
   }
