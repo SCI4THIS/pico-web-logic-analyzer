@@ -57,7 +57,33 @@ make BOARD=raspberry_pi_pico all
 
 A new USB network interface appears on the host. It is normally assigned an address in 192.168.7.x by the device's DHCP server (otherwise give the host NIC a static 192.168.7.x address), then browse to http://192.168.7.1 to load the served web page.
 
+# Architecture and implementation notes
+
+This project builds on three upstream projects rather than duplicating their implementations: the
+TinyUSB lwIP web-server examples, pico-ws-server, and the LogicAnalyzer firmware.
+
+The original TinyUSB main.c is included through a small C bridge that renames its entry points
+and exposes the USB-network initialization and polling functions used by the application.  This
+keeps the original USB Ethernet, DHCP, DNS, and lwIP setup recognizable while allowing the
+projects C++ entry point to add its own behavior.  USB ECM is selected because it was more reliable
+on Linux than RNDIS, which produced repeated transmit-queue watchdog timeouts.
+
+pico-ws-server is included as a pinned Git submodule and handles both HTTP and WebSocket
+connections on port 80.  A locally maintained patch removes its mandatory dependency on the
+Pico W CYW43 Wi-Fi driver, allowing it to operate over the lwIP network interface provided by
+TinyUSB USB ECM.  Keeping this adaption as a patch avoid maintaining a fork while making
+the USB-specific changes explicit.
+
+The LogicAnalyzer repository is also included as a pinned Git submodule
+logic_analyzer_bridge.c includes the upstream LogicAnalyzer_Capture.c implementation in
+a controlled C translation unit and exposes a smaller project-specific interface.  This provides
+access to required file-local capture functionality without copying or separtely maintaining the
+upstream implementation.
+
+The included HTML interface acts as both a device interface and a protocol test harness.
+
 # WebSocket support
+
 
 Apply the pico-ws-server USB-ECM adaption:
 
@@ -68,10 +94,7 @@ Configure and build:
 
   export PICO_SDK_PATH=# pico-sdk
 
-  cmake -S . -B build \
-      -DBOARD=raspberry_pi_pico \
-      -DSTATIC_HTML_PATH="$PWD/lib/lwip/src/apps/http/fs" \
-      -DSTATIC_HTML_FILENAME=index.html
+  cmake -S . -B build -DBOARD=raspberry_pi_pico
 
   cmake --build build --parallel
 

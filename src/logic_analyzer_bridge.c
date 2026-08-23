@@ -37,8 +37,6 @@ uint32_t la_raw_high_count(void)
   return count;
 }
 
-#define STREAM_BUFFER_SIZE CAPTURE_BUFFER_SIZE
-#define STREAM_MAX_SLOTS 512
 
 static uint32_t la_frequency = 1000;
 static uint32_t la_chunk_bytes = 256;

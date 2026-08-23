@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<button onclick="send_cmd('STATUS')">STATUS</button>
+<button onclick="send_cmd('CAPTURE_TEST')">CAPTURE_TEST</button>
+<button onclick="send_cmd('STREAM_START')">STREAM_START</button>
+<button onclick="send_cmd('STREAM_STOP')">STREAM_STOP</button>
+<button onclick="send_cmd('PIN_TEST')">PIN_TEST</button>
+<br />
+<input id="frequency" type="number" value="1000">
+<select id="chunkSize">
+  <option value="256">256 B</option>
+  <option value="1024">1 KiB</option>
+  <option value="4096">4 KiB</option>
+</select>
+<button id="configure">Configure</button>
+<button onclick="send_cmd('STREAM_TEST_START')">STREAM_TEST_START</button>
+<button onclick="send_cmd('STREAM_TEST_STOP')">STREAM_TEST_STOP</button>
+<pre id="output"></pre>
+<pre id="stats"></pre>
+<script>
+const output = document.querySelector("#output");
+const ws_url = 'ws://' + location.host + '/';
+var ws = new WebSocket(ws_url);
+var line_count = 0;
+ws.binaryType = "arraybuffer";
+var lastSequence;
+var expectedSample;
+var totalSamples;
+var startTime;
+
+function handle_stream_test_chunk(view, data)
+{
+  const sequence = view.getUint32(4, true);
+  const sampleCount = view.getUint32(8, true);
+  const sampleRate = view.getUint32(12, true);
+  const overruns = view.getUint32(16, true);
+  const payloadBytes = view.getUint32(20, true);
+  const firstSample = view.getBigUint64(24, true);
+  if (lastSequence !== undefined && sequence !== ((lastSequence + 1) >>> 0)) {
+    console.warn("Sequence gap");
+  }
+  if (expectedSample !== undefined && firstSample !== expectedSample) {
+    console.warn("Sample gap");
+  }
+  lastSequence = sequence;
+  expectedSample = firstSample + BigInt(sampleCount);
+  totalSamples += sampleCount;
+  const samples = new Uint8Array(data, 40, payloadBytes);
+  output.textContent = Array.from(samples).slice(0, 32).map(function(value, index) { return `${index}: ${value}`; } ).join("\n");
+  const seconds = (performance.now() - startTime) / 1000;
+  stats.textContent =
+    `Configured: ${sampleRate} sample/s\n` +
+    `Delivered: ${(totalSamples / seconds).toFixed(1)} sample/s\n` +
+    `Sequence: ${sequence}\n` +
+    `Overruns: ${overruns}`;
+}
+
+ws.onmessage = function(event) {
+  if (line_count == 64) {
+    output.textContent = "";
+    line_count = 0;
+  }
+  if (typeof event.data == "string") {
+    output.textContent += event.data + "\n";
+    line_count++;
+    if (event.data === "STREAM_TEST_STARTED") {
+      lastSequence = undefined;
+      expectedSample = undefined;
+      totalSamples = 0;
+      startTime = performance.now();
+    }
+    return;
+  }
+  const view = new DataView(event.data);
+  if (view.byteLength >= 40) {
+    const magic = view.getUint32(0, true);
+    if (magic === 0x31414C50) {
+      handle_stream_test_chunk(view, event.data);
+      return;
+    }
+  }
+  const samples = new Uint8Array(event.data);
+  output.textContent += Array.from(samples).join(" ") + "\n";
+  line_count++;
+}
+
+function send_cmd(s) {
+  output.textContent = "";
+  line_count = 0;
+  ws.send(s);
+}
+
+configure.onclick = function() {
+  ws.send(`SET_FREQ ${frequency.value}`);
+  ws.send(`SET_CHUNK_SIZE ${chunkSize.value}`);
+}
+</script>

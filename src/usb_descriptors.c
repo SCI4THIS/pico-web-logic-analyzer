@@ -49,6 +49,8 @@ enum {
 
 enum {
 #if CFG_TUD_ECM_RNDIS
+  /* Project override: prefer ECM on Linux to avoid
+   * rndis_host transmit-queue stalls. */
   CONFIG_ID_ECM   = 0,
   CONFIG_ID_RNDIS = 1,
 #else

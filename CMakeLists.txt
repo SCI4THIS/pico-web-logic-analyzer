@@ -43,6 +43,7 @@ target_compile_definitions(lwipopts_provider INTERFACE
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
   BUILD_PICO
+  USE_ECM=1
 )
 
 
@@ -64,10 +65,6 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   ${TOP}/lib/networking
   ${LA_DIR}
   )
-
-target_include_directories(${PROJECT_NAME} PRIVATE
-  ${LA_DIR}
-)
 
 # lib/networking sources
 target_sources(${PROJECT_NAME} PUBLIC
@@ -117,6 +114,20 @@ set(
   CACHE BOOL
   "Use CYW43 networking in pico-ws-server"
   FORCE
+)
+
+set(
+  STATIC_HTML_PATH
+  "${CMAKE_CURRENT_LIST_DIR}/web"
+  CACHE PATH
+  "Web interface directory"
+)
+
+set(
+  STATIC_HTML_FILENAME
+  "index.html"
+  CACHE STRING
+  "Web interface filename"
 )
 
 add_subdirectory(submodules/pico-ws-server)

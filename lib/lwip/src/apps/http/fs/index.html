@@ -1,94 +1,47 @@
-<!DOCTYPE html>
-<button onclick="send_cmd('STATUS')">STATUS</button>
-<button onclick="send_cmd('CAPTURE_TEST')">CAPTURE_TEST</button>
-<button onclick="send_cmd('STREAM_START')">STREAM_START</button>
-<button onclick="send_cmd('STREAM_STOP')">STREAM_STOP</button>
-<button onclick="send_cmd('PIN_TEST')">PIN_TEST</button>
-<br />
-<input id="frequency" type="number" value="1000">
-<select id="chunkSize">
-  <option value="256">256 B</option>
-  <option value="1024">1 KiB</option>
-  <option value="4096">4 KiB</option>
-</select>
-<button id="configure">Configure</button>
-<button onclick="send_cmd('STREAM_TEST_START')">STREAM_TEST_START</button>
-<button onclick="send_cmd('STREAM_TEST_STOP')">STREAM_TEST_STOP</button>
-<pre id="output"></pre>
-<pre id="stats"></pre>
-<script>
-const output = document.querySelector("#output");
-const ws_url = 'ws://' + location.host + '/';
-var ws = new WebSocket(ws_url);
-var line_count = 0;
-ws.binaryType = "arraybuffer";
-var lastSequence;
-var expectedSample;
-var totalSamples;
-var startTime;
+<html>
+<head><title>lwIP - A Lightweight TCP/IP Stack</title></head>
+<body bgcolor="white" text="black">
 
-function handle_stream_test_chunk(view, data)
-{
-  const sequence = view.getUint32(4, true);
-  const sampleCount = view.getUint32(8, true);
-  const sampleRate = view.getUint32(12, true);
-  const overruns = view.getUint32(16, true);
-  const payloadBytes = view.getUint32(20, true);
-  const firstSample = view.getBigUint64(24, true);
-  if (lastSequence !== undefined && sequence !== ((lastSequence + 1) >>> 0)) {
-    console.warn("Sequence gap");
-  }
-  if (expectedSample !== undefined && firstSample !== expectedSample) {
-    console.warn("Sample gap");
-  }
-  lastSequence = sequence;
-  expectedSample = firstSample + BigInt(sampleCount);
-  totalSamples += sampleCount;
-  const samples = new Uint8Array(data, 40, payloadBytes);
-  output.textContent = Array.from(samples).slice(0, 32).map(function(value, index) { return `${index}: ${value}`; } ).join("\n");
-  const seconds = (performance.now() - startTime) / 1000;
-  stats.textContent =
-    `Configured: ${sampleRate} sample/s\n` +
-    `Delivered: ${(totalSamples / seconds).toFixed(1)} sample/s\n` +
-    `Sequence: ${sequence}\n` +
-    `Overruns: ${overruns}`;
-}
+    <table width="100%">
+      <tr valign="top"><td width="80">	  
+	  <a href="http://www.sics.se/"><img src="/img/sics.gif"
+	  border="0" alt="SICS logo" title="SICS logo"></a>
+	</td><td width="500">	  
+	  <h1>lwIP - A Lightweight TCP/IP Stack</h1>
+	  <p>
+	    The web page you are watching was served by a simple web
+	    server running on top of the lightweight TCP/IP stack <a
+	    href="http://www.sics.se/~adam/lwip/">lwIP</a>.
+	  </p>
+	  <p>
+	    lwIP is an open source implementation of the TCP/IP
+	    protocol suite that was originally written by <a
+	    href="http://www.sics.se/~adam/lwip/">Adam Dunkels
+	    of the Swedish Institute of Computer Science</a> but now is
+	    being actively developed by a team of developers
+	    distributed world-wide. Since it's release, lwIP has
+	    spurred a lot of interest and has been ported to several
+	    platforms and operating systems. lwIP can be used either
+	    with or without an underlying OS.
+	  </p>
+	  <p>
+	    The focus of the lwIP TCP/IP implementation is to reduce
+	    the RAM usage while still having a full scale TCP. This
+	    makes lwIP suitable for use in embedded systems with tens
+	    of kilobytes of free RAM and room for around 40 kilobytes
+	    of code ROM.
+	  </p>
+	  <p>
+	    More information about lwIP can be found at the lwIP
+	    homepage at <a
+	    href="http://savannah.nongnu.org/projects/lwip/">http://savannah.nongnu.org/projects/lwip/</a>
+	    or at the lwIP wiki at <a
+	    href="http://lwip.wikia.com/">http://lwip.wikia.com/</a>.
+	  </p>
+	</td><td>
+	  &nbsp;
+	</td></tr>
+      </table>
+</body>
+</html>
 
-ws.onmessage = function(e) {
-  if (line_count == 64) {
-    output.textContent = "";
-    line_count = 0;
-  }
-  if (typeof event.data == "string") {
-    output.textContent += event.data + "\n";
-    if (event.data === "STREAM_TEST_STARTED") {
-      lastSequence = undefined;
-      expectedSample = undefined;
-      totalSamples = 0;
-      startTime = performance.now();
-    }
-  } else {
-    const view = new DataView(event.data);
-    if (view.byteLength >= 40) {
-      const magic = view.getUint32(0, true);
-      if (magic === 0x31414C50) {
-        handle_stream_test_chunk(view, event.data);
-      }
-    }
-    const samples = new Uint8Array(event.data);
-    output.textContent += Array.from(samples).join(" ") + "\n";
-  }
-  line_count++;
-}
-
-function send_cmd(s) {
-  output.textContent = "";
-  line_count = 0;
-  ws.send(s);
-}
-
-configure.onclick = function() {
-  ws.send(`SET_FREQ ${frequency.value}`);
-  ws.send(`SET_CHUNK_SIZE ${chunkSize.value}`);
-}
-</script>
