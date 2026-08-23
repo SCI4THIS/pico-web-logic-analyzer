@@ -67,16 +67,16 @@ static void websocket_disconnect(WebSocketServer& server, uint32_t connection_id
 
 static void start_single_capture(WebSocketServer& server, uint32_t id)
 {
-  gpio_pull_up(2);
+  gpio_pull_up(LA_TRIGGER_GPIO);
   sleep_us(10);
-  bool started = la_single_capture_start(0, 64, 0, true);
+  bool started = la_single_capture_start(0, 64, LA_TRIGGER_CHANNEL, true);
   if (started) {
     single_capture_pending = true;
     single_capture_connection = id;
-    gpio_pull_up(2);
+    gpio_pull_up(LA_TRIGGER_GPIO);
     server.sendMessage(id, "SINGLE_CAPTURE_STARTED");
     sleep_us(10);
-    gpio_pull_down(2);
+    gpio_pull_down(LA_TRIGGER_GPIO);
   } else {
     server.sendMessage(id, "SINGLE_CAPTURE_ERROR");
   }
@@ -84,11 +84,11 @@ static void start_single_capture(WebSocketServer& server, uint32_t id)
 
 static bool start_capture_chain()
 {
-  gpio_pull_down(2);
+  gpio_pull_down(LA_TRIGGER_GPIO);
   sleep_us(50);
-  bool started = la_single_capture_start(0, 32, 0, true);
+  bool started = la_single_capture_start(0, 32, LA_TRIGGER_CHANNEL, true);
   if (started) {
-    gpio_pull_up(2);
+    gpio_pull_up(LA_TRIGGER_GPIO);
   }
   return started;
 }
@@ -140,7 +140,6 @@ static void stop_stream(void)
 
 static void websocket_message(WebSocketServer& server, uint32_t id, const void *data, size_t length) {
   uint32_t value;
-  uint32_t channel_index;
   char command[64];
   size_t count = length < sizeof(command) - 1 ? length : sizeof(command) - 1;
 
@@ -173,7 +172,7 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   if (COMMAND_IS("CAPTURE_CHAIN_STOP")) {
     capture_chain_enabled = false;
     la_single_capture_stop();
-    gpio_disable_pulls(2);
+    gpio_disable_pulls(LA_TRIGGER_GPIO);
     server.sendMessage(id, "CAPTURE_CHAIN_STOPPED");
     return;
   }
@@ -239,18 +238,9 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     server.sendMessage(id, command);
     return;
   }
-  if (sscanf(command, "SET_CHANNEL_COUNT %lu", &value) == 1) {
-    uint8_t requested = value <= LA_MAX_CHANNELS ? (uint8_t)value : 0;
-    uint8_t configured = la_configure_channel_count(&requested);
-    snprintf(command, sizeof(command), "CHANNEL_COUNT %u", configured);
-    server.sendMessage(id, command);
-    return;
-  }
-  if (sscanf(command, "SET_CHANNEL %lu %lu", &channel_index, &value) == 2) {
-    uint8_t requested = value < LA_MAX_CHANNELS ? (uint8_t)value : 0xFF;
-    uint8_t configured = la_configure_channel(channel_index, &requested);
-    snprintf(command, sizeof(command), "CHANNEL %lu %u",
-             channel_index, configured);
+  if (sscanf(command, "SET_CHANNEL_MASK %lx", &value) == 1) {
+    value = la_configure_channel_mask(&value);
+    snprintf(command, sizeof(command), "CHANNEL_MASK %06lx", value);
     server.sendMessage(id, command);
     return;
   }
@@ -281,7 +271,7 @@ void single_capture_tasks()
     }
 
     la_single_capture_release();
-    gpio_disable_pulls(2);
+    gpio_disable_pulls(LA_TRIGGER_GPIO);
     single_capture_pending = false;
   }
 }
