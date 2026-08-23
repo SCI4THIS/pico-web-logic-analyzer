@@ -1,10 +1,8 @@
 <!DOCTYPE html>
 <h1>Configure</h1>
 Frequency: <input id="frequency" type="number" value="1000"> Hz <br />
-Channel Count: <input id="channel_count" type="number" value="1"> <br />
-<div id="channels">
-<input id="channel_0" type="number" value="0" max="23" value="1">
-</div>
+Channels:
+<div id="channels"></div>
 Chunk Size: <select id="chunkSize">
   <option value="256">256 B</option>
   <option value="1024">1 KiB</option>
@@ -42,30 +40,49 @@ var expectedSample;
 var totalSamples;
 var startTime;
 var analysisMode = false;
+var bytesPerSample = 1;
+var displayMask = 1;
 
-function update_channel_count(e) {
-  const countInput = document.getElementById("channel_count");
+function create_channel_checkboxes() {
   const container = document.getElementById("channels");
-  const count = Math.max(1, Math.min(24, countInput.value));
-  countInput.value = count;
-  const previous = Array.from(container.querySelectorAll("input")).map(function(input) { return input.value });
-  container.replaceChildren();
-  for (let i=0; i<count; i++) {
+  for (let channel = 0; channel < 24; channel++) {
     const label = document.createElement("label");
     const input = document.createElement("input");
-    input.id = `channel_${i}`;
-    input.type = "number";
-    input.min = "0";
-    input.max = "23";
-    input.value = previous[i] ?? i;
-    label.append(`Channel ${i + 1}: `, input);
-    container.append(label, document.createElement("br"));
+    input.id = `channel_${channel}`;
+    input.type = "checkbox";
+    input.checked = channel === 0;
+    label.append(input, ` ${channel + 1}`);
+    container.append(label, " ");
   }
 }
 
-document.getElementById("channel_count").value = 1;
-update_channel_count(event);
-document.getElementById("channel_count").onchange = update_channel_count;
+create_channel_checkboxes();
+
+function raw_bit(channel) {
+  return channel <= 20 ? channel : channel + 3;
+}
+
+function display_raw(data, width) {
+  const view = new DataView(data);
+  const sampleCount = Math.floor(view.byteLength / width);
+  const displayed = Math.min(sampleCount, 64);
+  const digits = width === 1 ? 2 : width === 2 ? 4 : 8;
+  const samples = [];
+
+  for (let index = 0; index < displayed; index++) {
+    const offset = index * width;
+    const raw = width === 1
+      ? view.getUint8(offset)
+      : width === 2
+        ? view.getUint16(offset, true)
+        : view.getUint32(offset, true);
+    const value = (raw & displayMask) >>> 0;
+    samples.push(value.toString(16).padStart(digits, "0"));
+  }
+
+  output.textContent += samples.join(" ") + "\n";
+  line_count++;
+}
 
 function handle_analysis(view, data)
 {
@@ -91,12 +108,15 @@ function handle_analysis(view, data)
 
   for (let index = 0; index < displayed; index++) {
     const offset = index * bytesPerSample;
-    const value = bytesPerSample === 1
+    let value = bytesPerSample === 1
       ? payload.getUint8(offset)
       : bytesPerSample === 2
         ? payload.getUint16(offset, true)
         : payload.getUint32(offset, true);
-    samples.push(`${index}: ${value}`);
+    value = (value & displayMask) >>> 0;
+    const digits = bytesPerSample === 1 ? 2 :
+      bytesPerSample === 2 ? 4 : 8;
+    samples.push(`${index}: ${value.toString(16).padStart(digits, "0")}`);
   }
 
   output.textContent = samples.join("\n");
@@ -146,9 +166,7 @@ ws.onmessage = function(event) {
       return;
     }
   }
-  const samples = new Uint8Array(event.data);
-  output.textContent += Array.from(samples).join(" ") + "\n";
-  line_count++;
+  display_raw(event.data, bytesPerSample);
 }
 
 function send_cmd(s) {
@@ -158,22 +176,26 @@ function send_cmd(s) {
 }
 
 document.getElementById("configure").onclick = function() {
-  const count = Number(document.getElementById("channel_count").value);
-  const selectedChannels = [];
-  for (let i=0; i<count; i++) {
-    const channel = Number(document.getElementById(`channel_${i}`).value);
-    if (!Number.isInteger(channel) || channel < 0 || channel >= 24) {
-      output.textContent = `Channel ${i + 1} must be between 0 and 23\n`;
-      return;
+  let channelMask = 0;
+  displayMask = 0;
+  let highest = -1;
+
+  for (let channel = 0; channel < 24; channel++) {
+    if (document.getElementById(`channel_${channel}`).checked) {
+      channelMask |= 2 ** channel;
+      displayMask |= 2 ** raw_bit(channel);
+      highest = channel;
     }
-    selectedChannels.push(channel);
   }
 
+  if (highest < 0) {
+    output.textContent = "Select at least one channel\n";
+    return;
+  }
+
+  bytesPerSample = highest < 8 ? 1 : highest < 16 ? 2 : 4;
   ws.send(`SET_FREQ ${frequency.value}`);
   ws.send(`SET_CHUNK_SIZE ${chunkSize.value}`);
-  ws.send(`SET_CHANNEL_COUNT ${selectedChannels.length}`);
-  selectedChannels.forEach((channel, index) => {
-    ws.send(`SET_CHANNEL ${index} ${channel}`);
-  });
+  ws.send(`SET_CHANNEL_MASK ${channelMask.toString(16)}`);
 }
 </script>

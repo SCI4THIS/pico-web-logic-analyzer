@@ -51,6 +51,7 @@ uint32_t la_raw_high_count(void)
 struct {
   uint32_t frequency;
   uint32_t chunk_bytes;
+  uint32_t channel_mask;
   uint8_t channel_count;
   uint8_t channels[LA_MAX_CHANNELS];
   CHANNEL_MODE mode;
@@ -58,8 +59,9 @@ struct {
 } la_config = {
   .frequency = 1000,
   .chunk_bytes = 256,
+  .channel_mask = 1,
   .channel_count = 1,
-  .channels = {1},
+  .channels = {0},
   .mode = MODE_8_CHANNEL,
   .bytes_per_sample = 1,
 };
@@ -88,13 +90,15 @@ static uint8_t la_bytes_per_sample_mode(CHANNEL_MODE mode)
   return 0;
 }
 
-static void la_update_channel_mode(void)
+static void la_update_channel_config(void)
 {
   uint8_t highest = 0;
+  la_config.channel_count = 0;
 
-  for (uint8_t i = 0; i < la_config.channel_count; i++) {
-    if (la_config.channels[i] > highest) {
-      highest = la_config.channels[i];
+  for (uint8_t channel = 0; channel < LA_MAX_CHANNELS; channel++) {
+    if (la_config.channel_mask & (1u << channel)) {
+      la_config.channels[la_config.channel_count++] = channel;
+      highest = channel;
     }
   }
 
@@ -126,42 +130,16 @@ uint32_t la_configure_chunk_bytes(uint32_t *chunk_bytes)
   return la_config.chunk_bytes;
 }
 
-uint8_t la_configure_channel(size_t i, uint8_t *channel)
+uint32_t la_configure_channel_mask(uint32_t *channel_mask)
 {
-  if (i >= la_config.channel_count) {
-    return 0xFF;
-  }
-  if (channel != NULL && !la_is_busy()) {
-    if (*channel < LA_MAX_CHANNELS) {
-      la_config.channels[i] = *channel;
-      la_update_channel_mode();
+  if (channel_mask != NULL && !la_is_busy()) {
+    if (*channel_mask != 0 &&
+        (*channel_mask & ~((1u << LA_MAX_CHANNELS) - 1u)) == 0) {
+      la_config.channel_mask = *channel_mask;
+      la_update_channel_config();
     }
   }
-  return la_config.channels[i];
-}
-
-uint8_t la_configure_channel_count(uint8_t *channel_count)
-{
-  if (channel_count != NULL && !la_is_busy()) {
-    if (0 < *channel_count && *channel_count <= LA_MAX_CHANNELS) {
-      la_config.channel_count = *channel_count;
-      la_update_channel_mode();
-    }
-  }
-  return la_config.channel_count;
-}
-
-uint8_t la_copy_channels(uint8_t *channel_out, size_t channel_out_size)
-{
-  size_t i;
-  size_t n = channel_out_size;
-  if (la_config.channel_count < n) {
-    n = la_config.channel_count;
-  }
-  for (i=0; i<n; i++) {
-    channel_out[i] = la_configure_channel(i, NULL);
-  }
-  return n;
+  return la_config.channel_mask;
 }
 
 bool la_single_capture_is_running(void)
@@ -186,16 +164,35 @@ bool la_single_capture_start(uint32_t pre_samples, uint32_t post_samples,
   return la_single_capture_active;
 }
 
+static void la_get_raw_capture(uint32_t *samples, uint32_t *first,
+                               CHANNEL_MODE *mode)
+{
+  *samples = lastPreSize + lastPostSize * (lastLoopCount + 1);
+  *mode = lastCaptureMode;
+  uint8_t width = la_bytes_per_sample_mode(*mode);
+  uint32_t capacity = CAPTURE_BUFFER_SIZE / width;
+
+  if (lastTail < *samples - 1) {
+    *first = capacity - *samples + lastTail + 1;
+  } else {
+    *first = lastTail - *samples + 1;
+  }
+
+  lastStartPosition = *first;
+}
+
 bool la_single_capture_get_result(la_capture_result_t *result)
 {
   if (!result || !la_single_capture_active || IsCapturing()) {
     return false;
   }
-  uint32_t samples = 0;
-  uint32_t first = 0;
-  CHANNEL_MODE mode = MODE_8_CHANNEL;
+  uint32_t samples;
+  uint32_t first;
+  CHANNEL_MODE mode;
   uint8_t timestamp_count = 0;
-  result->buffer = GetBuffer(&samples, &first, &mode);
+  la_get_raw_capture(&samples, &first, &mode);
+
+  result->buffer = captureBuffer;
   result->samples = samples;
   result->first_sample = first;
   result->bytes_per_sample = la_bytes_per_sample_mode(mode);
@@ -219,18 +216,18 @@ void la_single_capture_stop(void)
 
 static bool la_start_chunk(void)
 {
-  gpio_pull_down(pinMap[0]);
+  gpio_pull_down(pinMap[LA_TRIGGER_CHANNEL]);
   sleep_us(50);
   uint32_t chunk_samples =
       la_config.chunk_bytes / la_config.bytes_per_sample;
   bool started = StartCaptureSimple(
       la_config.frequency, 0, chunk_samples, 0, 0,
-      la_config.channels, la_config.channel_count, 0, true,
+      la_config.channels, la_config.channel_count, LA_TRIGGER_CHANNEL, true,
       la_config.mode);
   if (started) {
     la_capture_active = true;
     sleep_us(50);
-    gpio_pull_up(pinMap[0]);
+    gpio_pull_up(pinMap[LA_TRIGGER_CHANNEL]);
   }
   return started;
 }
@@ -262,11 +259,11 @@ bool la_capture_chain_take(la_analysis_block_t *block)
   uint32_t samples;
   uint32_t first;
   CHANNEL_MODE mode;
-  uint8_t *buffer = GetBuffer(&samples, &first, &mode);
+  la_get_raw_capture(&samples, &first, &mode);
   if (mode != la_config.mode) {
     return false;
   }
-  block->data = buffer + first * la_config.bytes_per_sample;
+  block->data = captureBuffer + first * la_config.bytes_per_sample;
   block->bytes = samples * la_config.bytes_per_sample;
   block->samples = samples;
   block->sequence = la_sequence++;
@@ -298,7 +295,7 @@ void la_capture_chain_stop(void)
   if (la_capture_active && IsCapturing()) {
     StopCapture();
   }
-  gpio_disable_pulls(pinMap[0]);
+  gpio_disable_pulls(pinMap[LA_TRIGGER_CHANNEL]);
   la_running = false;
   la_capture_active = false;
   la_block_outstanding = false;
