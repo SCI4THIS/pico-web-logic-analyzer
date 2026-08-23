@@ -14,6 +14,11 @@
 <button id="configure">Configure</button>
 <button onclick="send_cmd('CAPTURE_CHAIN_ANALYSIS_START')">CAPTURE_CHAIN_ANALYSIS_START</button>
 <button onclick="send_cmd('CAPTURE_CHAIN_ANALYSIS_STOP')">CAPTURE_CHAIN_ANALYSIS_STOP</button>
+<br />
+<button onclick="send_cmd('STREAM_START')">STREAM_START</button>
+<button onclick="send_cmd('STREAM_STOP')">STREAM_STOP</button>
+<button onclick="send_cmd('STREAM_ANALYSIS_START')">STREAM_ANALYSIS_START</button>
+<button onclick="send_cmd('STREAM_ANALYSIS_STOP')">STREAM_ANALYSIS_STOP</button>
 <pre id="output"></pre>
 <pre id="stats"></pre>
 <script>
@@ -26,8 +31,9 @@ var lastSequence;
 var expectedSample;
 var totalSamples;
 var startTime;
+var analysisMode = false;
 
-function handl_capture_chain_analysis(view, data)
+function handle_analysis(view, data)
 {
   const sequence = view.getUint32(4, true);
   const sampleCount = view.getUint32(8, true);
@@ -63,18 +69,32 @@ ws.onmessage = function(event) {
     output.textContent += event.data + "\n";
     line_count++;
     if (event.data === "CAPTURE_CHAIN_ANALYSIS_STARTED") {
+      analysisMode = true;
       lastSequence = undefined;
       expectedSample = undefined;
       totalSamples = 0;
       startTime = performance.now();
     }
+    if (event.data === "STREAM_ANALYSIS_STARTED") {
+      analysisMode = true;
+      lastSequence = undefined;
+      expectedSample = undefined;
+      totalSamples = 0;
+      startTime = performance.now();
+    }
+    if (event.data === "CAPTURE_CHAIN_ANALYSIS_STOPPED" ||
+        event.data === "STREAM_ANALYSIS_STOPPED" ||
+        event.data === "CAPTURE_CHAIN_STARTED" ||
+        event.data === "STREAM_STARTED") {
+      analysisMode = false;
+    }
     return;
   }
   const view = new DataView(event.data);
-  if (view.byteLength >= 40) {
+  if (analysisMode && view.byteLength >= 40) {
     const magic = view.getUint32(0, true);
     if (magic === 0x31414C50) {
-      handl_capture_chain_analysis(view, event.data);
+      handle_analysis(view, event.data);
       return;
     }
   }

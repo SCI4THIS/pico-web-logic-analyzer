@@ -41,8 +41,17 @@ static constexpr size_t MAX_STREAM_CHUNK = 8192;
 
 static uint8_t stream_frame[sizeof(StreamHeader) + MAX_STREAM_CHUNK];
 static bool block_pending = false;
-static la_capture_chain_block_t pending_block;
+static la_analysis_block_t pending_analysis_block;
 bool capture_chain_analysis_enabled = false;
+
+enum class StreamMode {
+  stopped,
+  raw,
+  analysis,
+};
+
+static StreamMode stream_mode = StreamMode::stopped;
+static bool stream_block_pending = false;
 
 
 static void websocket_connect(WebSocketServer& server, uint32_t connection_id) {
@@ -85,7 +94,7 @@ static bool start_capture_chain()
   return started;
 }
 
-static bool send_capture_chain_analysis_block(const la_capture_chain_block_t& block)
+static bool send_analysis_block(const la_analysis_block_t& block)
 {
   if (block.bytes > MAX_STREAM_CHUNK) {
     return false;
@@ -105,6 +114,38 @@ static bool send_capture_chain_analysis_block(const la_capture_chain_block_t& bl
   return websocket_server.sendMessage(stream_connection, stream_frame, sizeof(header) + block.bytes);
 }
 
+static bool start_stream(WebSocketServer& server, uint32_t id, StreamMode mode)
+{
+  if (capture_chain_enabled || capture_chain_pending ||
+      capture_chain_analysis_enabled || is_capture_response_pending) {
+    server.sendMessage(id, "CAPTURE_BUSY");
+    return false;
+  }
+
+  if (!la_stream_configure(requested_frequency, requested_chunk_size,
+                           stream_pins, 1)) {
+    server.sendMessage(id, "CONFIG_ERROR");
+    return false;
+  }
+
+  if (!la_stream_start()) {
+    server.sendMessage(id, "START_ERROR");
+    return false;
+  }
+
+  stream_connection = id;
+  stream_mode = mode;
+  stream_block_pending = false;
+  return true;
+}
+
+static void stop_stream(void)
+{
+  la_stream_stop();
+  stream_mode = StreamMode::stopped;
+  stream_block_pending = false;
+}
+
 static void websocket_message(WebSocketServer& server, uint32_t id, const void *data, size_t length) {
   uint32_t value;
   char command[64];
@@ -118,10 +159,18 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     return;
   }
   if (COMMAND_IS("CAPTURE_TEST")) {
+    if (la_stream_is_running()) {
+      server.sendMessage(id, "STREAM_BUSY");
+      return;
+    }
     start_test_capture(server, id);
     return;
   }
   if (COMMAND_IS("CAPTURE_CHAIN_START")) {
+    if (la_stream_is_running()) {
+      server.sendMessage(id, "STREAM_BUSY");
+      return;
+    }
     capture_chain_enabled = true;
     stream_connection = id;
     next_stream_ms = 0;
@@ -140,6 +189,10 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     return;
   }
   if (COMMAND_IS("CAPTURE_CHAIN_ANALYSIS_START")) {
+    if (la_stream_is_running()) {
+      server.sendMessage(id, "STREAM_BUSY");
+      return;
+    }
     if (!la_capture_chain_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
       server.sendMessage(id, "CONFIG_ERROR");
       return;
@@ -159,6 +212,28 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     capture_chain_analysis_enabled = false;
     block_pending = false;
     server.sendMessage(id, "CAPTURE_CHAIN_ANALYSIS_STOPPED");
+    return;
+  }
+  if (COMMAND_IS("STREAM_START")) {
+    if (start_stream(server, id, StreamMode::raw)) {
+      server.sendMessage(id, "STREAM_STARTED");
+    }
+    return;
+  }
+  if (COMMAND_IS("STREAM_STOP")) {
+    stop_stream();
+    server.sendMessage(id, "STREAM_STOPPED");
+    return;
+  }
+  if (COMMAND_IS("STREAM_ANALYSIS_START")) {
+    if (start_stream(server, id, StreamMode::analysis)) {
+      server.sendMessage(id, "STREAM_ANALYSIS_STARTED");
+    }
+    return;
+  }
+  if (COMMAND_IS("STREAM_ANALYSIS_STOP")) {
+    stop_stream();
+    server.sendMessage(id, "STREAM_ANALYSIS_STOPPED");
     return;
   }
   memmove(command, data, count);
@@ -227,12 +302,28 @@ int main(void) {
       capture_chain_pending = start_capture_chain();
     }
     if (capture_chain_analysis_enabled && !block_pending) {
-      block_pending = la_capture_chain_take(&pending_block);
+      block_pending = la_capture_chain_take(&pending_analysis_block);
     }
     if (block_pending) {
-      if (send_capture_chain_analysis_block(pending_block)) {
-        la_capture_chain_release(pending_block.slot);
+      if (send_analysis_block(pending_analysis_block)) {
+        la_capture_chain_release(pending_analysis_block.slot);
 	block_pending = false;
+      }
+    }
+    if (stream_mode != StreamMode::stopped && !stream_block_pending) {
+      stream_block_pending = la_stream_take(&pending_analysis_block);
+    }
+    if (stream_block_pending) {
+      bool sent = stream_mode == StreamMode::analysis
+          ? send_analysis_block(pending_analysis_block)
+          : websocket_server.sendMessage(
+                stream_connection,
+                pending_analysis_block.data,
+                pending_analysis_block.bytes);
+
+      if (sent) {
+        la_stream_release(pending_analysis_block.slot);
+        stream_block_pending = false;
       }
     }
   }
