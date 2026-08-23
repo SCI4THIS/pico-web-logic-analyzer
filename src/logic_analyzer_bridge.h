@@ -24,10 +24,12 @@ typedef struct {
   uint8_t timestamp_count;
 } la_capture_result_t;
 
-bool la_capture_start_simple(uint32_t pre_samples, uint32_t post_samples, uint8_t trigger_pin, bool invert_trigger);
-bool la_capture_is_running(void);
-bool la_capture_get_result(la_capture_result_t *result);
-void la_capture_stop(void);
+bool la_single_capture_start(uint32_t pre_samples, uint32_t post_samples,
+                             uint8_t trigger_pin, bool invert_trigger);
+bool la_single_capture_is_running(void);
+bool la_single_capture_get_result(la_capture_result_t *result);
+void la_single_capture_release(void);
+void la_single_capture_stop(void);
 
 typedef struct {
   const uint8_t *data;

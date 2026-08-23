@@ -9,8 +9,8 @@ static WebSocketServer websocket_server(1);
 static uint32_t active_connection = 0;
 static bool websocket_connected = false;
 
-static bool is_capture_response_pending = false;
-static uint32_t capture_connection = 0;
+static bool single_capture_pending = false;
+static uint32_t single_capture_connection = 0;
 
 static bool capture_chain_enabled = false;
 static bool capture_chain_pending = false;
@@ -49,7 +49,8 @@ static bool stream_block_pending = false;
 
 static bool is_busy()
 {
-  return la_is_busy() || is_capture_response_pending || capture_chain_enabled || capture_chain_pending;
+  return la_is_busy() || single_capture_pending ||
+         capture_chain_enabled || capture_chain_pending;
 }
 
 static void websocket_connect(WebSocketServer& server, uint32_t connection_id) {
@@ -64,20 +65,20 @@ static void websocket_disconnect(WebSocketServer& server, uint32_t connection_id
   websocket_connected = false;
 }
 
-static void start_test_capture(WebSocketServer& server, uint32_t id)
+static void start_single_capture(WebSocketServer& server, uint32_t id)
 {
   gpio_pull_up(2);
   sleep_us(10);
-  bool started = la_capture_start_simple(0, 64, 0, true);
+  bool started = la_single_capture_start(0, 64, 0, true);
   if (started) {
-    is_capture_response_pending = true;
-    capture_connection = id;
+    single_capture_pending = true;
+    single_capture_connection = id;
     gpio_pull_up(2);
-    server.sendMessage(id, "CAPTURE_STARTED");
+    server.sendMessage(id, "SINGLE_CAPTURE_STARTED");
     sleep_us(10);
     gpio_pull_down(2);
   } else {
-    server.sendMessage(id, "CAPTURE_ERROR");
+    server.sendMessage(id, "SINGLE_CAPTURE_ERROR");
   }
 }
 
@@ -85,7 +86,7 @@ static bool start_capture_chain()
 {
   gpio_pull_down(2);
   sleep_us(50);
-  bool started = la_capture_start_simple(0, 32, 0, true);
+  bool started = la_single_capture_start(0, 32, 0, true);
   if (started) {
     gpio_pull_up(2);
   }
@@ -149,12 +150,12 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     server.sendMessage(id, "SNAFU!");
     return;
   }
-  if (COMMAND_IS("CAPTURE_TEST")) {
+  if (COMMAND_IS("SINGLE_CAPTURE")) {
     if (is_busy()) {
       server.sendMessage(id, "CAPTURE_BUSY");
       return;
     }
-    start_test_capture(server, id);
+    start_single_capture(server, id);
     return;
   }
   if (COMMAND_IS("CAPTURE_CHAIN_START")) {
@@ -170,7 +171,7 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   }
   if (COMMAND_IS("CAPTURE_CHAIN_STOP")) {
     capture_chain_enabled = false;
-    la_capture_stop();
+    la_single_capture_stop();
     gpio_disable_pulls(2);
     server.sendMessage(id, "CAPTURE_CHAIN_STOPPED");
     return;
@@ -249,26 +250,38 @@ bool websocket_init(void) {
   return websocket_server.startListening(80);
 }
 
+void single_capture_tasks()
+{
+  if (single_capture_pending && !la_single_capture_is_running()) {
+    la_capture_result_t result;
+    if (la_single_capture_get_result(&result)) {
+      size_t offset = result.first_sample * result.bytes_per_sample;
+      size_t length = result.samples * result.bytes_per_sample;
+      websocket_server.sendMessage(
+          single_capture_connection, result.buffer + offset, length);
+    } else {
+      websocket_server.sendMessage(
+          single_capture_connection, "SINGLE_CAPTURE_ERROR");
+    }
+
+    la_single_capture_release();
+    gpio_disable_pulls(2);
+    single_capture_pending = false;
+  }
+}
+
 void capture_chain_tasks()
 {
   uint32_t now = to_ms_since_boot(get_absolute_time());
-  if (is_capture_response_pending && !la_capture_is_running()) {
-    la_capture_result_t result;
-    if (la_capture_get_result(&result)) {
-      size_t offset = result.first_sample * result.bytes_per_sample;
-      size_t length = result.samples * result.bytes_per_sample;
-      websocket_server.sendMessage(capture_connection, result.buffer + offset, length);
-      gpio_disable_pulls(2);
-      is_capture_response_pending = false;
-    }
-  }
-  if (capture_chain_pending && !la_capture_is_running()) {
+  if (capture_chain_pending && !la_single_capture_is_running()) {
 #define STREAM_CAPTURE_DEBUG 0
 #if STREAM_CAPTURE_DEBUG
     uint32_t raw_high = la_raw_high_count();
 #endif
     la_capture_result_t result;
-    if (!la_capture_get_result(&result)) {
+    if (!la_single_capture_get_result(&result)) {
+      la_single_capture_release();
+      capture_chain_pending = false;
       return;
     }
 #if STREAM_CAPTURE_DEBUG
@@ -279,6 +292,7 @@ void capture_chain_tasks()
 #endif
     size_t offset = result.first_sample * result.bytes_per_sample;
     websocket_server.sendMessage(stream_connection, result.buffer + offset, 32);
+    la_single_capture_release();
     capture_chain_pending = false;
     next_stream_ms = now + 50;
   }
@@ -328,6 +342,7 @@ int main(void) {
   while (1) {
     tinyusb_network_poll();
     websocket_server.popMessages();
+    single_capture_tasks();
     capture_chain_tasks();
     stream_tasks();
   }

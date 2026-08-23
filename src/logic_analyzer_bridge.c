@@ -57,14 +57,14 @@ static bool la_running;
 static bool la_capture_active;
 static bool la_block_outstanding;
 static bool la_stream_running;
-static bool la_simple_capture_active;
+static bool la_single_capture_active;
 
 static uint32_t la_sequence;
 static uint64_t la_next_sample;
 
 bool la_is_busy(void)
 {
-  return la_running || la_stream_running || la_simple_capture_active;
+  return la_running || la_stream_running || la_single_capture_active;
 }
 
 uint32_t la_configure_frequency(uint32_t *freq)
@@ -133,12 +133,13 @@ uint8_t la_bytes_per_sample_mode(CHANNEL_MODE mode)
   return 0;
 }
 
-bool la_capture_is_running(void)
+bool la_single_capture_is_running(void)
 {
-  return la_simple_capture_active && IsCapturing();
+  return la_single_capture_active && IsCapturing();
 }
 
-bool la_capture_start_simple(uint32_t pre_samples, uint32_t post_samples, uint8_t trigger_pin, bool invert_trigger)
+bool la_single_capture_start(uint32_t pre_samples, uint32_t post_samples,
+                             uint8_t trigger_pin, bool invert_trigger)
 {
   uint32_t freq = la_config.frequency;
   uint8_t *pins = la_config.channels;
@@ -148,14 +149,15 @@ bool la_capture_start_simple(uint32_t pre_samples, uint32_t post_samples, uint8_
   if (la_is_busy()) {
     return false;
   }
-  la_simple_capture_active = StartCaptureSimple(freq, pre_samples, post_samples, 0, 0, pins,
-                                                pin_count, trigger_pin, invert_trigger, mode);
-  return la_simple_capture_active;
+  la_single_capture_active = StartCaptureSimple(
+      freq, pre_samples, post_samples, 0, 0, pins, pin_count,
+      trigger_pin, invert_trigger, mode);
+  return la_single_capture_active;
 }
 
-bool la_capture_get_result(la_capture_result_t *result)
+bool la_single_capture_get_result(la_capture_result_t *result)
 {
-  if (!result || !la_simple_capture_active || IsCapturing()) {
+  if (!result || !la_single_capture_active || IsCapturing()) {
     return false;
   }
   uint32_t samples = 0;
@@ -168,16 +170,20 @@ bool la_capture_get_result(la_capture_result_t *result)
   result->bytes_per_sample = la_bytes_per_sample_mode(mode);
   result->timestamps = GetTimestamps(&timestamp_count);
   result->timestamp_count = timestamp_count;
-  la_simple_capture_active = false;
   return true;
 }
 
-void la_capture_stop(void)
+void la_single_capture_release(void)
 {
-  if (la_simple_capture_active) {
+  la_single_capture_active = false;
+}
+
+void la_single_capture_stop(void)
+{
+  if (la_single_capture_active && IsCapturing()) {
     StopCapture();
   }
-  la_simple_capture_active = false;
+  la_single_capture_release();
 }
 
 static bool la_start_chunk(void)
