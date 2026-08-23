@@ -147,7 +147,7 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   (length == sizeof(s) - 1 && memcmp(data, s, sizeof(s) - 1) == 0)
 
   if (COMMAND_IS("STATUS")) {
-    server.sendMessage(id, "SNAFU!");
+    server.sendMessage(id, "We're all find here now, thank you.. How are you?");
     return;
   }
   if (COMMAND_IS("SINGLE_CAPTURE")) {
@@ -292,7 +292,7 @@ void capture_chain_tasks()
     }
 #if STREAM_CAPTURE_DEBUG
     char debug[160];
-    snprintf(debug, sizeof(debug), "samples=%lu first=%lu widtdh=%u gpio=%u firstByte=%u, rawHigh=%lu",
+    snprintf(debug, sizeof(debug), "samples=%lu first=%lu width=%u gpio=%u firstByte=%u, rawHigh=%lu",
              result.first_sample, result.bytes_per_sample, gpio_get(3), result.buffer[result.first_sample], raw_high);
     websocket_server.sendMessage(stream_connection, debug);
 #endif
