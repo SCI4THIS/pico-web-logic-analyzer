@@ -51,7 +51,6 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 target_sources(${PROJECT_NAME} PUBLIC
   ${CMAKE_CURRENT_LIST_DIR}/src/main.cpp
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_descriptors.c
-  ${CMAKE_CURRENT_LIST_DIR}/src/capture.cpp
   ${CMAKE_CURRENT_LIST_DIR}/src/logic_analyzer_bridge.c
   ${CMAKE_CURRENT_LIST_DIR}/src/tinyusb_main_bridge.c
   )

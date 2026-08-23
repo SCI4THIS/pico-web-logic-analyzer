@@ -57,13 +57,14 @@ static bool la_running;
 static bool la_capture_active;
 static bool la_block_outstanding;
 static bool la_stream_running;
+static bool la_simple_capture_active;
 
 static uint32_t la_sequence;
 static uint64_t la_next_sample;
 
 bool la_is_busy(void)
 {
-  return la_running || la_stream_running;
+  return la_running || la_stream_running || la_simple_capture_active;
 }
 
 uint32_t la_configure_frequency(uint32_t *freq)
@@ -120,6 +121,63 @@ uint8_t la_copy_channels(uint8_t *channel_out, size_t channel_out_size)
     channel_out[i] = la_configure_channel(i, NULL);
   }
   return n;
+}
+
+uint8_t la_bytes_per_sample_mode(CHANNEL_MODE mode)
+{
+  switch (mode) {
+    case MODE_8_CHANNEL: return 1;
+    case MODE_16_CHANNEL: return 2;
+    case MODE_24_CHANNEL: return 3;
+  }
+  return 0;
+}
+
+bool la_capture_is_running(void)
+{
+  return la_simple_capture_active && IsCapturing();
+}
+
+bool la_capture_start_simple(uint32_t pre_samples, uint32_t post_samples, uint8_t trigger_pin, bool invert_trigger)
+{
+  uint32_t freq = la_config.frequency;
+  uint8_t *pins = la_config.channels;
+  uint8_t  pin_count = la_config.channel_count;
+  CHANNEL_MODE mode = MODE_8_CHANNEL;
+
+  if (la_is_busy()) {
+    return false;
+  }
+  la_simple_capture_active = StartCaptureSimple(freq, pre_samples, post_samples, 0, 0, pins,
+                                                pin_count, trigger_pin, invert_trigger, mode);
+  return la_simple_capture_active;
+}
+
+bool la_capture_get_result(la_capture_result_t *result)
+{
+  if (!result || !la_simple_capture_active || IsCapturing()) {
+    return false;
+  }
+  uint32_t samples = 0;
+  uint32_t first = 0;
+  CHANNEL_MODE mode = MODE_8_CHANNEL;
+  uint8_t timestamp_count = 0;
+  result->buffer = GetBuffer(&samples, &first, &mode);
+  result->samples = samples;
+  result->first_sample = first;
+  result->bytes_per_sample = la_bytes_per_sample_mode(mode);
+  result->timestamps = GetTimestamps(&timestamp_count);
+  result->timestamp_count = timestamp_count;
+  la_simple_capture_active = false;
+  return true;
+}
+
+void la_capture_stop(void)
+{
+  if (la_simple_capture_active) {
+    StopCapture();
+  }
+  la_simple_capture_active = false;
 }
 
 static bool la_start_chunk(void)

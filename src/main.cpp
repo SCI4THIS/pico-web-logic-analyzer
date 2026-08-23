@@ -1,7 +1,6 @@
 #include "bsp/board_api.h"
 #include "tinyusb_main_bridge.h"
 #include "pico_ws_server/web_socket_server.h"
-#include "capture.h"
 #include "hardware/gpio.h"
 #include <cstring>
 #include "logic_analyzer_bridge.h"
@@ -50,8 +49,7 @@ static bool stream_block_pending = false;
 
 static bool is_busy()
 {
-  return la_is_busy() || capture::busy() || is_capture_response_pending ||
-         capture_chain_enabled || capture_chain_pending;
+  return la_is_busy() || is_capture_response_pending || capture_chain_enabled || capture_chain_pending;
 }
 
 static void websocket_connect(WebSocketServer& server, uint32_t connection_id) {
@@ -70,10 +68,7 @@ static void start_test_capture(WebSocketServer& server, uint32_t id)
 {
   gpio_pull_up(2);
   sleep_us(10);
-  uint8_t pins[24] = { 0 };
-  uint8_t pin_count = la_copy_channels(pins, sizeof(pins));
-  uint32_t freq = la_configure_frequency(NULL);
-  bool started = capture::start_simple(freq, 0, 64, pins, pin_count, 0, true);
+  bool started = la_capture_start_simple(0, 64, 0, true);
   if (started) {
     is_capture_response_pending = true;
     capture_connection = id;
@@ -90,10 +85,7 @@ static bool start_capture_chain()
 {
   gpio_pull_down(2);
   sleep_us(50);
-  uint8_t channels[24] = { 0 };
-  uint8_t channel_count = la_copy_channels(channels, sizeof(channels));
-  uint32_t frequency = la_configure_frequency(NULL);
-  bool started = capture::start_simple(frequency, 0, 32, channels, channel_count, 0, true, capture::Mode::channels8);
+  bool started = la_capture_start_simple(0, 32, 0, true);
   if (started) {
     gpio_pull_up(2);
   }
@@ -178,7 +170,7 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   }
   if (COMMAND_IS("CAPTURE_CHAIN_STOP")) {
     capture_chain_enabled = false;
-    capture::stop();
+    la_capture_stop();
     gpio_disable_pulls(2);
     server.sendMessage(id, "CAPTURE_CHAIN_STOPPED");
     return;
@@ -260,20 +252,25 @@ bool websocket_init(void) {
 void capture_chain_tasks()
 {
   uint32_t now = to_ms_since_boot(get_absolute_time());
-  if (is_capture_response_pending && !capture::busy()) {
-    auto result = capture::result();
-    size_t offset = result.first_sample * result.bytes_per_sample;
-    size_t length = result.samples * result.bytes_per_sample;
-    websocket_server.sendMessage(capture_connection, result.buffer + offset, length);
-    gpio_disable_pulls(2);
-    is_capture_response_pending = false;
+  if (is_capture_response_pending && !la_capture_is_running()) {
+    la_capture_result_t result;
+    if (la_capture_get_result(&result)) {
+      size_t offset = result.first_sample * result.bytes_per_sample;
+      size_t length = result.samples * result.bytes_per_sample;
+      websocket_server.sendMessage(capture_connection, result.buffer + offset, length);
+      gpio_disable_pulls(2);
+      is_capture_response_pending = false;
+    }
   }
-  if (capture_chain_pending && !capture::busy()) {
+  if (capture_chain_pending && !la_capture_is_running()) {
 #define STREAM_CAPTURE_DEBUG 0
 #if STREAM_CAPTURE_DEBUG
     uint32_t raw_high = la_raw_high_count();
 #endif
-    auto result = capture::result();
+    la_capture_result_t result;
+    if (!la_capture_get_result(&result)) {
+      return;
+    }
 #if STREAM_CAPTURE_DEBUG
     char debug[160];
     snprintf(debug, sizeof(debug), "samples=%lu first=%lu widtdh=%u gpio=%u firstByte=%u, rawHigh=%lu",
