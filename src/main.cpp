@@ -63,6 +63,7 @@ try changing the first byte of tud_network_mac_address[] below from 0x02 to 0x00
 #include "capture.h"
 #include "hardware/gpio.h"
 #include <cstring>
+#include "logic_analyzer_bridge.h"
 
 #ifdef INCLUDE_IPERF
   #include "lwip/apps/lwiperf.h"
@@ -126,7 +127,7 @@ static bool stream_enabled = false;
 static bool stream_capture_pending = false;
 static uint32_t stream_connection = 0;
 static uint32_t next_stream_ms = 0;
-static const uint8_t stream_pins[] = { 0 };
+static const uint8_t stream_pins[] = { 1 };
 
 static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
   (void) netif;
@@ -347,6 +348,9 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     gpio_disable_pulls(2);
     server.sendMessage(id, "STREAM_STOPPED");
   }
+  if (length == 8 && memcmp(data, "PIN_TEST", 8) == 0) {
+    server.sendMessage(id, gpio_get(3) ? "GPIO:HIGH" : "GPIO:LOW");
+  }
   server.sendMessage(id, data, length);
 }
 
@@ -395,6 +399,12 @@ int main(void) {
   printf("USB RNDIS/ECM network interface initialized\n");
 #endif
 
+  /*
+  gpio_init(3);
+  gpio_set_dir(3, GPIO_IN);
+  gpio_pull_down(3);
+  */
+
   while (1) {
     uint32_t now = to_ms_since_boot(get_absolute_time());
     tud_task();
@@ -409,7 +419,17 @@ int main(void) {
       is_capture_response_pending = false;
     }
     if (stream_capture_pending && !capture::busy()) {
+#define STREAM_CAPTURE_DEBUG 0
+#if STREAM_CAPTURE_DEBUG
+      uint32_t raw_high = la_raw_high_count();
+#endif
       auto result = capture::result();
+#if STREAM_CAPTURE_DEBUG
+      char debug[160];
+      snprintf(debug, sizeof(debug), "samples=%lu first=%lu widtdh=%u gpio=%u firstByte=%u, rawHigh=%lu",
+               result.first_sample, result.bytes_per_sample, gpio_get(3), result.buffer[result.first_sample], raw_high);
+      websocket_server.sendMessage(stream_connection, debug);
+#endif
       size_t offset = result.first_sample * result.bytes_per_sample;
       websocket_server.sendMessage(stream_connection, result.buffer + offset, 32);
       stream_capture_pending = false;

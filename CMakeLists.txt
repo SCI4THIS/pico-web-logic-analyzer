@@ -51,7 +51,7 @@ target_sources(${PROJECT_NAME} PUBLIC
   ${CMAKE_CURRENT_LIST_DIR}/src/main.cpp
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_descriptors.c
   ${CMAKE_CURRENT_LIST_DIR}/src/capture.cpp
-  ${LA_DIR}/LogicAnalyzer_Capture.c
+  ${CMAKE_CURRENT_LIST_DIR}/src/logic_analyzer_bridge.c
   )
 
 # Example include
@@ -61,6 +61,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   ${LWIP}/src/include/ipv4
   ${LWIP}/src/include/lwip/apps
   ${TOP}/lib/networking
+  ${LA_DIR}
   )
 
 target_include_directories(${PROJECT_NAME} PRIVATE
