@@ -121,13 +121,37 @@ static bool websocket_connected = false;
 
 static bool is_capture_response_pending = false;
 static uint32_t capture_connection = 0;
-static const uint8_t test_pins[] = { };
+static const uint8_t test_pins[] = {1};
 
 static bool stream_enabled = false;
 static bool stream_capture_pending = false;
 static uint32_t stream_connection = 0;
 static uint32_t next_stream_ms = 0;
 static const uint8_t stream_pins[] = { 1 };
+
+static uint32_t requested_frequency = 1000;
+static uint32_t requested_chunk_size = 256;
+
+struct __attribute__((packed)) StreamHeader {
+  uint32_t magic;
+  uint32_t sequence;
+  uint32_t sample_count;
+  uint32_t sample_rate;
+  uint32_t overruns;
+  uint32_t payload_bytes;
+  uint64_t first_sample;
+  uint64_t device_time_us;
+};
+
+static_assert(sizeof(StreamHeader) == 40);
+
+static constexpr uint32_t STREAM_MAGIC = 0x31414C50;
+static constexpr size_t MAX_STREAM_CHUNK = 8192;
+
+static uint8_t stream_frame[sizeof(StreamHeader) + MAX_STREAM_CHUNK];
+static bool block_pending = false;
+static la_stream_block_t pending_block;
+bool stream_test_enabled = false;
 
 static err_t linkoutput_fn(struct netif *netif, struct pbuf *p) {
   (void) netif;
@@ -326,9 +350,32 @@ static bool start_stream_capture()
   return started;
 }
 
+static bool send_stream_block(const la_stream_block_t& block)
+{
+  if (block.bytes > MAX_STREAM_CHUNK) {
+    return false;
+  }
+  StreamHeader header = {
+    STREAM_MAGIC,
+    block.sequence,
+    block.samples,
+    requested_frequency,
+    block.overruns,
+    block.bytes,
+    block.first_sample,
+    block.device_time_us,
+  };
+  memmove(stream_frame, &header, sizeof(header));
+  memmove(stream_frame + sizeof(header), block.data, block.bytes);
+  return websocket_server.sendMessage(stream_connection, stream_frame, sizeof(header) + block.bytes);
+}
+
 static void websocket_message(WebSocketServer& server, uint32_t id, const void *data, size_t length) {
+  uint32_t value;
+  char command[64];
+  size_t count = length < sizeof(command) - 1 ? length : sizeof(command) - 1;
   if (length == 6 && memcmp(data, "STATUS", 6) == 0) {
-    server.sendMessage(id, "{\"status\":\"ok\",\"device\":\"pico-logic-analyzer\")");
+    server.sendMessage(id, "SNAFU!");
     return;
   }
   if (length == 12 && memcmp(data, "CAPTURE_TEST", 12) == 0) {
@@ -347,9 +394,45 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     capture::stop();
     gpio_disable_pulls(2);
     server.sendMessage(id, "STREAM_STOPPED");
+    return;
   }
   if (length == 8 && memcmp(data, "PIN_TEST", 8) == 0) {
     server.sendMessage(id, gpio_get(3) ? "GPIO:HIGH" : "GPIO:LOW");
+    return;
+  }
+  if (length == 17 && memcmp(data, "STREAM_TEST_START", 17) == 0) {
+    if (!la_stream_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
+      server.sendMessage(id, "CONFIG_ERROR");
+      return;
+    }
+    if (!la_stream_start()) {
+      server.sendMessage(id, "START_ERROR");
+      return;
+    }
+    stream_connection = id;
+    stream_test_enabled = true;
+    block_pending = false;
+    server.sendMessage(id, "STREAM_TEST_STARTED");
+    return;
+  }
+  if (length == 16 && memcmp(data, "STREAM_TEST_STOP", 16) == 0) {
+    la_stream_stop();
+    stream_test_enabled = false;
+    block_pending = false;
+    server.sendMessage(id, "STREAM_TEST_STOPPED");
+    return;
+  }
+  memmove(command, data, count);
+  command[count] = '\0';
+  if (sscanf(command, "SET_FREQ %lu", &value) == 1) {
+    requested_frequency = value;
+    server.sendMessage(id, "OK");
+    return;
+  }
+  if (sscanf(command, "SET_CHUNK_SIZE %lu", &value) == 1) {
+    requested_chunk_size = value;
+    server.sendMessage(id, "OK");
+    return;
   }
   server.sendMessage(id, data, length);
 }
@@ -437,6 +520,15 @@ int main(void) {
     }
     if (stream_enabled && !stream_capture_pending && now >= next_stream_ms) {
       stream_capture_pending = start_stream_capture();
+    }
+    if (stream_test_enabled && !block_pending) {
+      block_pending = la_stream_take(&pending_block);
+    }
+    if (block_pending) {
+      if (send_stream_block(pending_block)) {
+        la_stream_release(pending_block.slot);
+	block_pending = false;
+      }
     }
     handle_link_state_switch();
     led_blinking_task();
