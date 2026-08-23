@@ -14,8 +14,8 @@ static bool is_capture_response_pending = false;
 static uint32_t capture_connection = 0;
 static const uint8_t test_pins[] = {1};
 
-static bool stream_enabled = false;
-static bool stream_capture_pending = false;
+static bool capture_chain_enabled = false;
+static bool capture_chain_pending = false;
 static uint32_t stream_connection = 0;
 static uint32_t next_stream_ms = 0;
 static const uint8_t stream_pins[] = { 1 };
@@ -41,8 +41,8 @@ static constexpr size_t MAX_STREAM_CHUNK = 8192;
 
 static uint8_t stream_frame[sizeof(StreamHeader) + MAX_STREAM_CHUNK];
 static bool block_pending = false;
-static la_stream_block_t pending_block;
-bool stream_test_enabled = false;
+static la_capture_chain_block_t pending_block;
+bool capture_chain_analysis_enabled = false;
 
 
 static void websocket_connect(WebSocketServer& server, uint32_t connection_id) {
@@ -74,7 +74,7 @@ static void start_test_capture(WebSocketServer& server, uint32_t id)
   }
 }
 
-static bool start_stream_capture()
+static bool start_capture_chain()
 {
   gpio_pull_down(2);
   sleep_us(50);
@@ -85,7 +85,7 @@ static bool start_stream_capture()
   return started;
 }
 
-static bool send_stream_block(const la_stream_block_t& block)
+static bool send_capture_chain_analysis_block(const la_capture_chain_block_t& block)
 {
   if (block.bytes > MAX_STREAM_CHUNK) {
     return false;
@@ -109,52 +109,56 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
   uint32_t value;
   char command[64];
   size_t count = length < sizeof(command) - 1 ? length : sizeof(command) - 1;
-  if (length == 6 && memcmp(data, "STATUS", 6) == 0) {
+
+#define COMMAND_IS(s) \
+  (length == sizeof(s) - 1 && memcmp(data, s, sizeof(s) - 1) == 0)
+
+  if (COMMAND_IS("STATUS")) {
     server.sendMessage(id, "SNAFU!");
     return;
   }
-  if (length == 12 && memcmp(data, "CAPTURE_TEST", 12) == 0) {
+  if (COMMAND_IS("CAPTURE_TEST")) {
     start_test_capture(server, id);
     return;
   }
-  if (length == 12 && memcmp(data, "STREAM_START", 12) == 0) {
-    stream_enabled = true;
+  if (COMMAND_IS("CAPTURE_CHAIN_START")) {
+    capture_chain_enabled = true;
     stream_connection = id;
     next_stream_ms = 0;
-    server.sendMessage(id, "STREAM_STARTED");
+    server.sendMessage(id, "CAPTURE_CHAIN_STARTED");
     return;
   }
-  if (length == 11 && memcmp(data, "STREAM_STOP", 11) == 0) {
-    stream_enabled = false;
+  if (COMMAND_IS("CAPTURE_CHAIN_STOP")) {
+    capture_chain_enabled = false;
     capture::stop();
     gpio_disable_pulls(2);
-    server.sendMessage(id, "STREAM_STOPPED");
+    server.sendMessage(id, "CAPTURE_CHAIN_STOPPED");
     return;
   }
-  if (length == 8 && memcmp(data, "PIN_TEST", 8) == 0) {
+  if (COMMAND_IS("PIN_TEST")) {
     server.sendMessage(id, gpio_get(3) ? "GPIO:HIGH" : "GPIO:LOW");
     return;
   }
-  if (length == 17 && memcmp(data, "STREAM_TEST_START", 17) == 0) {
-    if (!la_stream_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
+  if (COMMAND_IS("CAPTURE_CHAIN_ANALYSIS_START")) {
+    if (!la_capture_chain_configure(requested_frequency, requested_chunk_size, stream_pins, 1)) {
       server.sendMessage(id, "CONFIG_ERROR");
       return;
     }
-    if (!la_stream_start()) {
+    if (!la_capture_chain_start()) {
       server.sendMessage(id, "START_ERROR");
       return;
     }
     stream_connection = id;
-    stream_test_enabled = true;
+    capture_chain_analysis_enabled = true;
     block_pending = false;
-    server.sendMessage(id, "STREAM_TEST_STARTED");
+    server.sendMessage(id, "CAPTURE_CHAIN_ANALYSIS_STARTED");
     return;
   }
-  if (length == 16 && memcmp(data, "STREAM_TEST_STOP", 16) == 0) {
-    la_stream_stop();
-    stream_test_enabled = false;
+  if (COMMAND_IS("CAPTURE_CHAIN_ANALYSIS_STOP")) {
+    la_capture_chain_stop();
+    capture_chain_analysis_enabled = false;
     block_pending = false;
-    server.sendMessage(id, "STREAM_TEST_STOPPED");
+    server.sendMessage(id, "CAPTURE_CHAIN_ANALYSIS_STOPPED");
     return;
   }
   memmove(command, data, count);
@@ -170,6 +174,7 @@ static void websocket_message(WebSocketServer& server, uint32_t id, const void *
     return;
   }
   server.sendMessage(id, data, length);
+#undef COMMAND_IS
 }
 
 bool websocket_init(void) {
@@ -201,7 +206,7 @@ int main(void) {
       gpio_disable_pulls(2);
       is_capture_response_pending = false;
     }
-    if (stream_capture_pending && !capture::busy()) {
+    if (capture_chain_pending && !capture::busy()) {
 #define STREAM_CAPTURE_DEBUG 0
 #if STREAM_CAPTURE_DEBUG
       uint32_t raw_high = la_raw_high_count();
@@ -215,18 +220,18 @@ int main(void) {
 #endif
       size_t offset = result.first_sample * result.bytes_per_sample;
       websocket_server.sendMessage(stream_connection, result.buffer + offset, 32);
-      stream_capture_pending = false;
+      capture_chain_pending = false;
       next_stream_ms = now + 50;
     }
-    if (stream_enabled && !stream_capture_pending && now >= next_stream_ms) {
-      stream_capture_pending = start_stream_capture();
+    if (capture_chain_enabled && !capture_chain_pending && now >= next_stream_ms) {
+      capture_chain_pending = start_capture_chain();
     }
-    if (stream_test_enabled && !block_pending) {
-      block_pending = la_stream_take(&pending_block);
+    if (capture_chain_analysis_enabled && !block_pending) {
+      block_pending = la_capture_chain_take(&pending_block);
     }
     if (block_pending) {
-      if (send_stream_block(pending_block)) {
-        la_stream_release(pending_block.slot);
+      if (send_capture_chain_analysis_block(pending_block)) {
+        la_capture_chain_release(pending_block.slot);
 	block_pending = false;
       }
     }

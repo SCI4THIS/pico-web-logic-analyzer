@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <button onclick="send_cmd('STATUS')">STATUS</button>
 <button onclick="send_cmd('CAPTURE_TEST')">CAPTURE_TEST</button>
-<button onclick="send_cmd('STREAM_START')">STREAM_START</button>
-<button onclick="send_cmd('STREAM_STOP')">STREAM_STOP</button>
+<button onclick="send_cmd('CAPTURE_CHAIN_START')">CAPTURE_CHAIN_START</button>
+<button onclick="send_cmd('CAPTURE_CHAIN_STOP')">CAPTURE_CHAIN_STOP</button>
 <button onclick="send_cmd('PIN_TEST')">PIN_TEST</button>
 <br />
 <input id="frequency" type="number" value="1000">
@@ -12,8 +12,8 @@
   <option value="4096">4 KiB</option>
 </select>
 <button id="configure">Configure</button>
-<button onclick="send_cmd('STREAM_TEST_START')">STREAM_TEST_START</button>
-<button onclick="send_cmd('STREAM_TEST_STOP')">STREAM_TEST_STOP</button>
+<button onclick="send_cmd('CAPTURE_CHAIN_ANALYSIS_START')">CAPTURE_CHAIN_ANALYSIS_START</button>
+<button onclick="send_cmd('CAPTURE_CHAIN_ANALYSIS_STOP')">CAPTURE_CHAIN_ANALYSIS_STOP</button>
 <pre id="output"></pre>
 <pre id="stats"></pre>
 <script>
@@ -27,7 +27,7 @@ var expectedSample;
 var totalSamples;
 var startTime;
 
-function handle_stream_test_chunk(view, data)
+function handl_capture_chain_analysis(view, data)
 {
   const sequence = view.getUint32(4, true);
   const sampleCount = view.getUint32(8, true);
@@ -62,7 +62,7 @@ ws.onmessage = function(event) {
   if (typeof event.data == "string") {
     output.textContent += event.data + "\n";
     line_count++;
-    if (event.data === "STREAM_TEST_STARTED") {
+    if (event.data === "CAPTURE_CHAIN_ANALYSIS_STARTED") {
       lastSequence = undefined;
       expectedSample = undefined;
       totalSamples = 0;
@@ -74,7 +74,7 @@ ws.onmessage = function(event) {
   if (view.byteLength >= 40) {
     const magic = view.getUint32(0, true);
     if (magic === 0x31414C50) {
-      handle_stream_test_chunk(view, event.data);
+      handl_capture_chain_analysis(view, event.data);
       return;
     }
   }

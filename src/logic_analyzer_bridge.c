@@ -64,7 +64,7 @@ static bool la_start_chunk(void)
   return started;
 }
 
-bool la_stream_start(void)
+bool la_capture_chain_start(void)
 {
   if (la_running) {
     return false;
@@ -83,7 +83,7 @@ bool la_stream_start(void)
   return true;
 }
 
-bool la_stream_take(la_stream_block_t *block)
+bool la_capture_chain_take(la_capture_chain_block_t *block)
 {
   if (!la_running || !block || la_block_outstanding || !la_capture_active) {
     return false;
@@ -114,7 +114,7 @@ bool la_stream_take(la_stream_block_t *block)
   return true;
 }
 
-void la_stream_release(uint8_t slot)
+void la_capture_chain_release(uint8_t slot)
 {
   (void)slot;
 
@@ -125,7 +125,7 @@ void la_stream_release(uint8_t slot)
   la_start_chunk();
 }
 
-void la_stream_stop(void)
+void la_capture_chain_stop(void)
 {
   if (la_capture_active && IsCapturing()) {
     StopCapture();
@@ -136,7 +136,7 @@ void la_stream_stop(void)
   la_block_outstanding = false;
 }
 
-bool la_stream_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count)
+bool la_capture_chain_configure(uint32_t frequency, uint32_t chunk_bytes, const uint8_t *channels, uint8_t channel_count)
 {
   if (la_running || !channels || channel_count == 0 || channel_count > 24 || chunk_bytes == 0 || chunk_bytes > 8192) {
     return false;
